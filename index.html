@@ -1519,11 +1519,103 @@
   .char-slot-btn.del:hover { background: rgba(200,60,60,0.15); border-color: #c55; }
   .char-slot-btn.overwrite { color: #5ac; border-color: #2a5a6a; }
   .char-slot-btn.overwrite:hover { background: rgba(50,150,170,0.15); border-color: #5ac; }
+  .char-slot-btn.dl { color: #8bc; border-color: #2a4a6a; }
+  .char-slot-btn.dl:hover { background: rgba(80,140,180,0.15); border-color: #8bc; }
+  .chars-upload-bar {
+    padding: 0.9rem 1.4rem 1.1rem;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .chars-upload-label {
+    font-family: 'Cinzel', serif; font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-secondary);
+  }
+  .chars-upload-btn {
+    width: 100%; padding: 0.55rem 0.9rem; border-radius: 5px;
+    border: 1px dashed var(--border); background: none;
+    color: #8bc; font-family: 'Cinzel', serif; font-size: 0.7rem;
+    text-transform: uppercase; letter-spacing: 0.07em;
+    cursor: pointer; transition: all 0.15s; text-align: center;
+  }
+  .chars-upload-btn:hover { background: rgba(80,140,180,0.1); border-color: #8bc; }
+
+  /* ── Prerequisite pick modal ──────────────────────────────────────────────── */
+  #prereq-modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+    z-index: 2000; display: none; align-items: center; justify-content: center;
+  }
+  #prereq-modal-backdrop.open { display: flex; }
+  #prereq-modal {
+    background: var(--bg-card); border: 1px solid var(--gold-dark);
+    border-radius: 10px; width: min(560px, 94vw); max-height: 88vh;
+    display: flex; flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+  }
+  #prereq-modal-header {
+    padding: 1rem 1.4rem 0.75rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  #prereq-modal-title {
+    font-family: Cinzel, serif; font-size: 1rem; color: var(--gold);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  #prereq-modal-close {
+    background: none; border: none; color: var(--text-secondary);
+    font-size: 1.2rem; cursor: pointer; padding: 0.2rem 0.5rem; border-radius: 4px;
+  }
+  #prereq-modal-close:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+  #prereq-modal-subtitle {
+    padding: 0.65rem 1.4rem 0.5rem; flex-shrink: 0;
+    font-family: 'Crimson Pro', Georgia, serif; font-size: 0.95rem;
+    color: var(--text-secondary); border-bottom: 1px solid var(--border);
+  }
+  #prereq-modal-list {
+    flex: 1; overflow-y: auto; padding: 0.7rem 1rem;
+    display: flex; flex-direction: column; gap: 0.4rem;
+    min-height: 0;
+  }
+  .prereq-row-selected > .prereq-row-header {
+    background: rgba(201,168,76,0.10) !important;
+  }
+  .prereq-row-header { user-select: none; }
+  .prereq-select-zone { cursor: pointer; }
+  .prereq-select-zone:hover .prereq-circle { border-color: var(--gold-dark); }
+  .prereq-expand-zone { cursor: pointer; }
+  .prereq-expand-zone:hover { opacity: 0.75; }
+  .prereq-circle {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.15s; background: transparent;
+  }
+  .prereq-row-selected .prereq-circle {
+    border-color: var(--gold); background: var(--gold);
+  }
+  #prereq-modal-footer {
+    padding: 0.8rem 1.4rem; border-top: 1px solid var(--border);
+    display: flex; gap: 0.6rem; justify-content: flex-end; flex-shrink: 0;
+  }
+  #prereq-modal-confirm {
+    padding: 0.5rem 1.3rem; border-radius: 6px;
+    background: linear-gradient(135deg, #c9a84c, #8a6020);
+    border: none; color: #fff; font-family: Cinzel, serif;
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em;
+    cursor: pointer; transition: opacity 0.15s;
+  }
+  #prereq-modal-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+  #prereq-modal-cancel {
+    padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border);
+    background: none; color: var(--text-secondary); font-family: Cinzel, serif;
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; cursor: pointer;
+  }
+  #prereq-modal-cancel:hover { border-color: var(--text-secondary); color: var(--text-primary); }
 
   .toast {
     position: fixed;
     bottom: 2rem;
-    right: 2rem;
+    left: 1.5rem;
+    right: auto;
     background: var(--bg-card);
     border: 1px solid var(--gold);
     border-radius: 8px;
@@ -2075,6 +2167,22 @@
 
 <!-- CHARACTERS DRAWER -->
 <div class="chars-backdrop" id="chars-backdrop" onclick="closeCharactersDrawer()"></div>
+
+<!-- Prerequisite pick modal -->
+<div id="prereq-modal-backdrop">
+  <div id="prereq-modal">
+    <div id="prereq-modal-header">
+      <span id="prereq-modal-title">Choose a Prerequisite</span>
+      <button id="prereq-modal-close" onclick="closePrereqModal()">✕</button>
+    </div>
+    <div id="prereq-modal-subtitle"></div>
+    <div id="prereq-modal-list"></div>
+    <div id="prereq-modal-footer">
+      <button id="prereq-modal-cancel" onclick="closePrereqModal()">Cancel</button>
+      <button id="prereq-modal-confirm" onclick="confirmPrereqModal()" disabled>Add to Character</button>
+    </div>
+  </div>
+</div>
 <div class="chars-drawer" id="chars-drawer">
   <div class="chars-drawer-header">
     <span class="chars-drawer-title">⚔ Characters</span>
@@ -2085,6 +2193,11 @@
     <button class="chars-save-confirm" onclick="saveCurrentCharacter()">Save</button>
   </div>
   <div class="chars-list" id="chars-list"></div>
+  <div class="chars-upload-bar">
+    <div class="chars-upload-label">📂 Import Character</div>
+    <button class="chars-upload-btn" onclick="triggerCharacterUpload()">⬆ Upload JSON</button>
+    <input type="file" id="chars-json-upload" accept=".json" style="display:none" onchange="handleCharacterJsonUpload(event)">
+  </div>
 </div>
 
 <!-- HOME PAGE -->
@@ -2413,7 +2526,7 @@
       <div class="detail-close"><button onclick="closeSpellPopup()">✕</button></div>
     </div>
     <!-- Wizard spell quota bar — hidden for non-wizard classes -->
-    <div id="wizard-spell-quota" style="display:none;padding:0.6rem 1.5rem;border-bottom:1px solid var(--border);background:rgba(74,122,204,0.08);"></div>
+    <div id="spellcaster-spell-quota" style="display:none;padding:0.6rem 1.5rem;border-bottom:1px solid var(--border);background:rgba(74,122,204,0.08);"></div>
     <div style="padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); background: var(--bg-card);">
       <div style="display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
         <div class="search-wrap" style="flex: 1; min-width: 200px;">
@@ -2493,7 +2606,7 @@
 <!-- ABILITY SCORES FAB — always visible, bottom-right -->
 <button id="ability-scores-fab" onclick="openPointBuyCalculator()"
   title="Generate Ability Scores"
-  style="position:fixed;bottom:1.75rem;right:1.75rem;z-index:801;
+  style="position:fixed;bottom:1.75rem;right:1.75rem;z-index:499;
          background:linear-gradient(135deg,#c9a84c 0%,#8a6020 100%);
          color:#fff;border:none;border-radius:10px;
          padding:0.7rem 1.2rem;font-family:Cinzel,serif;font-size:0.82rem;cursor:pointer;
@@ -2502,11 +2615,11 @@
          transition:transform 0.15s,box-shadow 0.15s;"
   onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 7px 24px rgba(0,0,0,0.65),0 2px 5px rgba(201,168,76,0.4)'"
   onmouseout="this.style.transform='';this.style.boxShadow='0 4px 18px rgba(0,0,0,0.55),0 1px 3px rgba(201,168,76,0.3)'">
-  <span style="font-size:1.1rem;">⚄</span> Ability Scores
+  <span style="font-size:1.1rem;">⚄</span><span>Ability Scores</span>
 </button>
 
 <!-- PENDING CHOICES FAB — floating action buttons stack above the ability scores FAB -->
-<div id="pending-choices-fab" style="position:fixed;bottom:5rem;right:1.75rem;z-index:800;display:none;flex-direction:column;gap:0.5rem;align-items:flex-end;pointer-events:none;"></div>
+<div id="pending-choices-fab" style="position:fixed;bottom:5rem;right:1.75rem;z-index:498;display:none;flex-direction:column;gap:0.5rem;align-items:flex-end;pointer-events:none;"></div>
 
 <script>
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2552,7 +2665,7 @@ let currentEquipmentCategory    = null;
 let currentEquipmentSubcategory = null;
 let equipmentTabCache = {};
 let equipmentManifestIndex = null;
-let character = { race:null, classes:[], favoredClassIndex:0, feats:[], traits:[], equipment:[], spells:[], deity:null, skillRanks:{}, skillMisc:{}, promptedFeatSlots:0,
+let character = { race:null, classes:[], favoredClassIndex:0, feats:[], traits:[], equipment:[], spells:[], preparedSpells:{}, deity:null, skillRanks:{}, skillMisc:{}, promptedFeatSlots:0,
   currency: { gp:0, sp:0, cp:0 }, _wealthGranted: false,
   stats: {
     str:10, dex:10, con:10, int:10, wis:10, cha:10,
@@ -5020,57 +5133,361 @@ async function openSpellPopup(className) {
   const ef=document.getElementById('spell-expensive-filter'); if(ef) ef.checked=false;
   const spells=loadSpellsForClassFromIndex(className);
   dataCache.spells=spells; renderSpellPopup(spells);
-  updateWizardSpellQuota();
+  updateSpellcasterQuota();
 }
 function closeSpellPopup() { document.getElementById('spell-popup-wrap').classList.remove('active'); currentSpellClass=null; }
 
-function updateWizardSpellQuota() {
-  const bar = document.getElementById('wizard-spell-quota');
-  if (!bar) return;
+// ─── Spellcaster Spell-Known Quota System ────────────────────────────────────
+// Tracks how many spells each class type should have chosen vs. how many they have.
+//
+// SPELLBOOK classes (Wizard, Magus, Arcanist): must record spells like a library.
+//   Wizard  : Level 1 → 3 + Int mod non-cantrip spells; each level after → +2
+//   Magus   : Level 1 → 3 non-cantrip spells; each level after → +1
+//   Arcanist: same schedule as Wizard (3 + Int mod at 1, +2 each level)
+//
+// SPONTANEOUS classes (Sorcerer, Bard, Oracle, Summoner, Inquisitor, Bloodrager):
+//   Track cumulative spells known from their official table.
+//   Cantrips (0th level) are tracked too for these classes.
+//
+// PREPARED-from-full-list (Cleric, Druid, Paladin, Ranger, Witch):
+//   No selection needed — they know (or have access to) all spells on their list.
+//   These classes are intentionally excluded from the quota system.
 
-  const isWizard = (currentSpellClass || '').toLowerCase() === 'wizard';
-  if (!isWizard) { bar.style.display = 'none'; return; }
+// ── Spellbook classes ─────────────────────────────────────────────────────────
+// Returns { totalExpected, maxSpellLevel, intMod } for a spellbook caster, or null.
+function getSpellbookQuota(clsName) {
+  const lk = clsName.toLowerCase();
+  const cls = (character.classes || []).find(c =>
+    (c.name || c._name || '').toLowerCase().trim() === lk);
+  if (!cls) return null;
+  const clsLevel = parseInt(cls.level) || 1;
 
+  // Key ability score
+  const abilKey = { wizard:'int', magus:'int', arcanist:'int' }[lk];
+  if (!abilKey) return null;
+
+  const rawScore = (character.stats || {})[abilKey] || 10;
+  const abilBonus = (typeof getTotalBonus === 'function') ? getTotalBonus(abilKey) : 0;
+  const abilMod = Math.max(0, Math.floor(((rawScore + abilBonus) - 10) / 2));
+
+  // Max spell level = ceil(clsLevel / 2), capped at 9 (Magus caps at 6)
+  const maxSpellLevel = lk === 'magus'
+    ? Math.min(6, Math.ceil(clsLevel / 2))
+    : Math.min(9, Math.ceil(clsLevel / 2));
+
+  let totalExpected;
+  if (lk === 'wizard' || lk === 'arcanist') {
+    totalExpected = 3 + abilMod; // level 1 base
+    for (let lvl = 2; lvl <= clsLevel; lvl++) totalExpected += 2;
+  } else if (lk === 'magus') {
+    totalExpected = 3; // level 1 base (Magus: 3 spells at 1st, +1 each level)
+    for (let lvl = 2; lvl <= clsLevel; lvl++) totalExpected += 1;
+  }
+
+  return { totalExpected, maxSpellLevel, abilMod, abilKey };
+}
+
+// ── Spontaneous spells-known tables (cumulative totals per level) ─────────────
+// Rows: class levels 1-20. Columns: cantrips, 1st, 2nd, … up to max.
+// Source: Pathfinder 1e Core Rulebook & related books.
+const SPELLS_KNOWN_TABLE = {
+  // Sorcerer: 9th-level caster, CHA
+  sorcerer: [
+  //  lv  0   1   2   3   4   5   6   7   8   9
+    [ 1,  4,  2,  0,  0,  0,  0,  0,  0,  0,  0],
+    [ 2,  5,  2,  0,  0,  0,  0,  0,  0,  0,  0],
+    [ 3,  5,  3,  0,  0,  0,  0,  0,  0,  0,  0],
+    [ 4,  6,  3,  1,  0,  0,  0,  0,  0,  0,  0],
+    [ 5,  6,  4,  2,  0,  0,  0,  0,  0,  0,  0],
+    [ 6,  7,  4,  2,  1,  0,  0,  0,  0,  0,  0],
+    [ 7,  7,  5,  3,  2,  0,  0,  0,  0,  0,  0],
+    [ 8,  8,  5,  3,  2,  1,  0,  0,  0,  0,  0],
+    [ 9,  8,  5,  4,  3,  2,  0,  0,  0,  0,  0],
+    [10,  9,  5,  4,  3,  2,  1,  0,  0,  0,  0],
+    [11,  9,  5,  5,  4,  3,  2,  0,  0,  0,  0],
+    [12,  9,  5,  5,  4,  3,  2,  1,  0,  0,  0],
+    [13,  9,  5,  5,  4,  4,  3,  2,  0,  0,  0],
+    [14,  9,  5,  5,  4,  4,  3,  2,  1,  0,  0],
+    [15,  9,  5,  5,  4,  4,  4,  3,  2,  0,  0],
+    [16,  9,  5,  5,  4,  4,  4,  3,  2,  1,  0],
+    [17,  9,  5,  5,  4,  4,  4,  4,  3,  2,  0],
+    [18,  9,  5,  5,  4,  4,  4,  4,  3,  2,  1],
+    [19,  9,  5,  5,  4,  4,  4,  4,  4,  3,  2],
+    [20,  9,  5,  5,  4,  4,  4,  4,  4,  4,  3],
+  ],
+  // Bard: 6th-level caster, CHA
+  bard: [
+  //  lv  0   1   2   3   4   5   6
+    [ 1,  4,  2,  0,  0,  0,  0,  0],
+    [ 2,  5,  3,  0,  0,  0,  0,  0],
+    [ 3,  6,  4,  0,  0,  0,  0,  0],
+    [ 4,  6,  4,  2,  0,  0,  0,  0],
+    [ 5,  7,  4,  3,  0,  0,  0,  0],
+    [ 6,  7,  4,  4,  0,  0,  0,  0],
+    [ 7,  8,  5,  4,  2,  0,  0,  0],
+    [ 8,  8,  5,  4,  3,  0,  0,  0],
+    [ 9,  9,  5,  4,  4,  0,  0,  0],
+    [10,  9,  5,  4,  4,  2,  0,  0],
+    [11, 10,  6,  5,  4,  3,  0,  0],
+    [12, 10,  6,  5,  4,  4,  0,  0],
+    [13, 11,  6,  5,  4,  4,  2,  0],
+    [14, 11,  6,  5,  4,  4,  3,  0],
+    [15, 12,  6,  5,  4,  4,  4,  0],
+    [16, 12,  6,  5,  5,  4,  4,  2],
+    [17, 13,  6,  5,  5,  4,  4,  3],
+    [18, 13,  6,  5,  5,  4,  4,  4],
+    [19, 13,  6,  5,  5,  5,  4,  4],
+    [20, 13,  6,  5,  5,  5,  5,  4],
+  ],
+  // Oracle: 9th-level caster, CHA (same table as Sorcerer)
+  oracle: null, // filled below
+  // Summoner: 6th-level caster, CHA
+  summoner: [
+  //  lv  0   1   2   3   4   5   6
+    [ 1,  4,  2,  0,  0,  0,  0,  0],
+    [ 2,  5,  2,  0,  0,  0,  0,  0],
+    [ 3,  6,  3,  0,  0,  0,  0,  0],
+    [ 4,  6,  3,  1,  0,  0,  0,  0],
+    [ 5,  6,  4,  2,  0,  0,  0,  0],
+    [ 6,  7,  4,  2,  1,  0,  0,  0],
+    [ 7,  7,  4,  3,  2,  0,  0,  0],
+    [ 8,  8,  4,  3,  2,  1,  0,  0],
+    [ 9,  8,  5,  4,  3,  2,  0,  0],
+    [10,  9,  5,  4,  3,  2,  0,  0],
+    [11,  9,  5,  4,  4,  3,  0,  0],
+    [12,  9,  5,  5,  4,  3,  1,  0],
+    [13,  9,  5,  5,  4,  4,  2,  0],
+    [14,  9,  5,  5,  5,  4,  2,  0],
+    [15,  9,  5,  5,  5,  4,  3,  0],
+    [16,  9,  5,  5,  5,  5,  3,  0],
+    [17,  9,  5,  5,  5,  5,  4,  0],
+    [18,  9,  5,  5,  5,  5,  4,  0],
+    [19,  9,  5,  5,  5,  5,  5,  0],
+    [20,  9,  5,  5,  5,  5,  5,  1],
+  ],
+  // Inquisitor: 6th-level caster, WIS
+  inquisitor: [
+  //  lv  0   1   2   3   4   5   6
+    [ 1,  4,  2,  0,  0,  0,  0,  0],
+    [ 2,  5,  3,  0,  0,  0,  0,  0],
+    [ 3,  6,  4,  0,  0,  0,  0,  0],
+    [ 4,  6,  4,  2,  0,  0,  0,  0],
+    [ 5,  7,  4,  3,  0,  0,  0,  0],
+    [ 6,  7,  4,  4,  0,  0,  0,  0],
+    [ 7,  8,  5,  4,  2,  0,  0,  0],
+    [ 8,  8,  5,  4,  3,  0,  0,  0],
+    [ 9,  9,  5,  4,  4,  0,  0,  0],
+    [10,  9,  5,  4,  4,  2,  0,  0],
+    [11, 10,  6,  5,  4,  3,  0,  0],
+    [12, 10,  6,  5,  4,  4,  0,  0],
+    [13, 11,  6,  5,  4,  4,  2,  0],
+    [14, 11,  6,  5,  4,  4,  3,  0],
+    [15, 12,  6,  5,  4,  4,  4,  0],
+    [16, 12,  6,  5,  5,  4,  4,  2],
+    [17, 13,  6,  5,  5,  4,  4,  3],
+    [18, 13,  6,  5,  5,  4,  4,  4],
+    [19, 13,  6,  5,  5,  5,  4,  4],
+    [20, 13,  6,  5,  5,  5,  5,  4],
+  ],
+  // Bloodrager: 4th-level caster, CHA (starts at level 4)
+  bloodrager: [
+  //  lv  0   1   2   3   4
+    [ 1,  0,  0,  0,  0,  0],
+    [ 2,  0,  0,  0,  0,  0],
+    [ 3,  0,  0,  0,  0,  0],
+    [ 4,  2,  2,  0,  0,  0],
+    [ 5,  3,  3,  0,  0,  0],
+    [ 6,  4,  4,  0,  0,  0],
+    [ 7,  4,  4,  2,  0,  0],
+    [ 8,  4,  4,  3,  0,  0],
+    [ 9,  4,  4,  4,  0,  0],
+    [10,  4,  4,  4,  2,  0],
+    [11,  4,  4,  4,  3,  0],
+    [12,  4,  4,  4,  4,  0],
+    [13,  4,  4,  4,  4,  2],
+    [14,  4,  4,  4,  4,  3],
+    [15,  4,  4,  4,  4,  4],
+    [16,  4,  5,  4,  4,  4],
+    [17,  4,  5,  5,  4,  4],
+    [18,  4,  5,  5,  5,  4],
+    [19,  4,  5,  5,  5,  5],
+    [20,  4,  5,  5,  5,  5],
+  ],
+};
+// Oracle uses the same spells-known table as Sorcerer
+SPELLS_KNOWN_TABLE.oracle = SPELLS_KNOWN_TABLE.sorcerer;
+
+// Key ability score per spontaneous class
+const SPONTANEOUS_ABILITY = {
+  sorcerer:'cha', bard:'cha', oracle:'cha', summoner:'cha',
+  inquisitor:'wis', bloodrager:'cha',
+};
+
+// All classes that use the spells-known quota system
+const SPELLBOOK_CLASSES   = new Set(['wizard','magus','arcanist']);
+const SPONTANEOUS_CLASSES = new Set(Object.keys(SPELLS_KNOWN_TABLE));
+
+// Returns deficit info for the currently-open spell popup class, or null.
+function checkSpellcasterSpellNotification(clsNameOverride) {
+  const clsKey = (clsNameOverride || currentSpellClass || '').toLowerCase();
+  if (!clsKey) return null;
+
+  // Spellbook casters
+  if (SPELLBOOK_CLASSES.has(clsKey)) {
+    const quota = getSpellbookQuota(clsKey);
+    if (!quota) return null;
+    const chosen = (character.spells || []).filter(s => {
+      const sl = parseInt(s._class_level ?? s.level ?? -1);
+      return sl >= 1;
+    }).length;
+    const deficit = Math.max(0, quota.totalExpected - chosen);
+    if (deficit > 0) return { deficit, className: clsKey, type: 'spellbook' };
+    return null;
+  }
+
+  // Spontaneous casters
+  if (SPONTANEOUS_CLASSES.has(clsKey)) {
+    const table = SPELLS_KNOWN_TABLE[clsKey];
+    if (!table) return null;
+    const cls = (character.classes || []).find(c =>
+      (c.name || c._name || '').toLowerCase().trim() === clsKey);
+    if (!cls) return null;
+    const clsLevel = Math.min(20, parseInt(cls.level) || 1);
+    const row = table[clsLevel - 1];
+    if (!row) return null;
+    // row[0] = class level, row[1] = cantrips, row[2+] = 1st-level+
+    const totalExpected = row.slice(1).reduce((a, b) => a + b, 0);
+    const chosen = (character.spells || []).length;
+    const deficit = Math.max(0, totalExpected - chosen);
+    if (deficit > 0) return { deficit, className: clsKey, type: 'spontaneous' };
+    return null;
+  }
+
+  return null;
+}
+
+// Back-compat alias used elsewhere
+function checkWizardSpellNotification() {
+  // Check if character has a Wizard class specifically
   const wizCls = (character.classes || []).find(c =>
     (c.name || c._name || '').toLowerCase().trim() === 'wizard');
-  if (!wizCls) { bar.style.display = 'none'; return; }
+  if (!wizCls) return null;
+  return checkSpellcasterSpellNotification('wizard');
+}
 
-  const wizLevel = parseInt(wizCls.level) || 1;
-  const rawInt   = (character.stats || {}).int || 10;
-  const intBonus = (typeof getTotalBonus === 'function') ? getTotalBonus('int') : 0;
-  const intMod   = Math.max(0, Math.floor(((rawInt + intBonus) - 10) / 2));
+// Compute quota data for the quota bar display
+function getSpellcasterQuotaData(clsKey) {
+  const lk = (clsKey || '').toLowerCase();
 
-  // Max spell level accessible at this wizard level: ceil(wizLevel/2), capped at 9
-  const maxSpellLevel = Math.min(9, Math.ceil(wizLevel / 2));
-
-  // Total spells expected: 3 + intMod at level 1, +2 each level after
-  let totalExpected = 3 + intMod;
-  for (let lvl = 2; lvl <= wizLevel; lvl++) totalExpected += 2;
-
-  // Count chosen (non-cantrip) spells per spell level
-  const chosenByLevel = {};
-  for (const s of (character.spells || [])) {
-    const sl = parseInt(s._class_level ?? s.level ?? -1);
-    if (sl <= 0) continue; // skip cantrips
-    chosenByLevel[sl] = (chosenByLevel[sl] || 0) + 1;
+  if (SPELLBOOK_CLASSES.has(lk)) {
+    const quota = getSpellbookQuota(lk);
+    if (!quota) return null;
+    // Count chosen non-cantrip spells by level
+    const chosenByLevel = {};
+    for (const s of (character.spells || [])) {
+      const sl = parseInt(s._class_level ?? s.level ?? -1);
+      if (sl >= 1) chosenByLevel[sl] = (chosenByLevel[sl] || 0) + 1;
+    }
+    const totalChosen = Object.values(chosenByLevel).reduce((a, b) => a + b, 0);
+    return {
+      type: 'spellbook',
+      totalExpected: quota.totalExpected,
+      totalChosen,
+      maxSpellLevel: quota.maxSpellLevel,
+      abilMod: quota.abilMod,
+      abilKey: quota.abilKey,
+      chosenByLevel,
+    };
   }
-  const totalChosen = Object.values(chosenByLevel).reduce((a, b) => a + b, 0);
-  const deficit = Math.max(0, totalExpected - totalChosen);
 
-  // Ordinal helper
-  const ord = n => n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+  if (SPONTANEOUS_CLASSES.has(lk)) {
+    const table = SPELLS_KNOWN_TABLE[lk];
+    if (!table) return null;
+    const cls = (character.classes || []).find(c =>
+      (c.name || c._name || '').toLowerCase().trim() === lk);
+    if (!cls) return null;
+    const clsLevel = Math.min(20, parseInt(cls.level) || 1);
+    const row = table[clsLevel - 1];
+    if (!row) return null;
+    // row[0]=level, row[1]=cantrips, row[2]=1st, ...
+    const maxSpellLevel = row.length - 2; // number of non-level columns minus cantrips
+    const expectedByLevel = {};
+    for (let i = 1; i < row.length; i++) {
+      const spLvl = i - 1; // 0 = cantrips
+      expectedByLevel[spLvl] = row[i];
+    }
+    const totalExpected = Object.values(expectedByLevel).reduce((a, b) => a + b, 0);
 
-  // Build per-level pills for levels 1..maxSpellLevel
+    // Count chosen spells by level
+    const chosenByLevel = {};
+    for (const s of (character.spells || [])) {
+      const sl = parseInt(s._class_level ?? s.level ?? 0);
+      chosenByLevel[sl] = (chosenByLevel[sl] || 0) + 1;
+    }
+    const totalChosen = (character.spells || []).length;
+
+    return {
+      type: 'spontaneous',
+      totalExpected,
+      totalChosen,
+      maxSpellLevel,
+      expectedByLevel,
+      chosenByLevel,
+    };
+  }
+
+  return null;
+}
+
+function updateWizardSpellQuota() { updateSpellcasterQuota(); }  // back-compat alias
+
+function updateSpellcasterQuota() {
+  const bar = document.getElementById('spellcaster-spell-quota');
+  if (!bar) return;
+
+  const clsKey = (currentSpellClass || '').toLowerCase();
+  const data = getSpellcasterQuotaData(clsKey);
+  if (!data) { bar.style.display = 'none'; return; }
+
+  const deficit = Math.max(0, data.totalExpected - data.totalChosen);
+  const ord = n => n === 0 ? 'Cantrips' : n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`;
+
+  const isSpellbook    = data.type === 'spellbook';
+  const isSpontaneous  = data.type === 'spontaneous';
+  const barLabel       = isSpellbook ? '📖 Spellbook' : '✨ Spells Known';
+  const barColor       = isSpellbook ? '#4a7acc' : '#9a6acc';
+  const borderBg       = isSpellbook ? 'rgba(74,122,204,0.08)' : 'rgba(154,106,204,0.08)';
+
+  bar.style.background = borderBg;
+
+  // Level pills
   const levelPills = [];
-  for (let sl = 1; sl <= maxSpellLevel; sl++) {
-    const have = chosenByLevel[sl] || 0;
-    levelPills.push(
-      `<span style="font-family:Cinzel,serif;font-size:0.72rem;background:rgba(74,122,204,0.18);
-        border:1px solid rgba(74,122,204,0.45);border-radius:4px;padding:2px 8px;
-        color:${have > 0 ? '#7ab8e8' : 'var(--text-muted)'};">
-        ${ord(sl)}: ${have}
-      </span>`
-    );
+  if (isSpellbook) {
+    for (let sl = 1; sl <= data.maxSpellLevel; sl++) {
+      const have = data.chosenByLevel[sl] || 0;
+      levelPills.push(
+        `<span style="font-family:Cinzel,serif;font-size:0.72rem;background:${barColor}22;
+          border:1px solid ${barColor}55;border-radius:4px;padding:2px 8px;
+          color:${have > 0 ? barColor : 'var(--text-muted)'};">
+          ${ord(sl)}: ${have}
+        </span>`
+      );
+    }
+  } else {
+    // Spontaneous: show each spell level with expected vs chosen
+    for (let sl = 0; sl <= data.maxSpellLevel; sl++) {
+      const expected = (data.expectedByLevel || {})[sl] || 0;
+      if (expected === 0) continue;
+      const have = data.chosenByLevel[sl] || 0;
+      const ok = have >= expected;
+      levelPills.push(
+        `<span style="font-family:Cinzel,serif;font-size:0.72rem;background:${barColor}22;
+          border:1px solid ${ok ? '#6abf7a55' : barColor + '55'};border-radius:4px;padding:2px 8px;
+          color:${ok ? '#6abf7a' : 'var(--text-muted)'};">
+          ${ord(sl)}: ${have}/${expected}
+        </span>`
+      );
+    }
   }
 
   const statusColor = deficit === 0 ? '#6abf7a' : '#c9a84c';
@@ -5078,19 +5495,26 @@ function updateWizardSpellQuota() {
     ? `<span style="color:#6abf7a;font-weight:bold;">✓ All spells chosen!</span>`
     : `<span style="color:#c9a84c;font-weight:bold;">${deficit} more to choose</span>`;
 
+  let hint = '';
+  if (isSpellbook) {
+    const abilLabel = (data.abilKey || 'int').toUpperCase();
+    hint = `Cantrips (0th) are all automatically known. Choose any spells up to ${ord(data.maxSpellLevel)} level.`;
+    if (data.abilMod > 0) hint += ` (${abilLabel} mod +${data.abilMod} included at level 1.)`;
+  } else {
+    hint = `Choose the exact number of spells shown above for each spell level (cumulative total).`;
+  }
+
   bar.style.display = 'block';
   bar.innerHTML = `
     <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
       <span style="font-family:Cinzel,serif;font-size:0.75rem;color:var(--text-secondary);white-space:nowrap;">
-        📖 Spellbook: <strong style="color:${statusColor};">${totalChosen} / ${totalExpected}</strong>
+        ${barLabel}: <strong style="color:${statusColor};">${data.totalChosen} / ${data.totalExpected}</strong>
       </span>
       <span style="font-size:0.7rem;color:var(--text-muted);">—</span>
       ${levelPills.join('')}
       <span style="margin-left:auto;font-family:Cinzel,serif;font-size:0.75rem;">${statusText}</span>
     </div>
-    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:0.35rem;">
-      Cantrips (0th) are all automatically known. Choose any spells up to ${ord(maxSpellLevel)} level.
-    </div>`;
+    <div style="font-size:0.68rem;color:var(--text-muted);margin-top:0.35rem;">${hint}</div>`;
 }
 function renderSpellPopup(spells) {
   const cont=document.getElementById('spell-popup-content'); if(!cont) return;
@@ -5161,7 +5585,7 @@ function toggleSpell(name) {
   if(idx>=0){character.spells.splice(idx,1);showToast(`${name} removed`);}
   else{character.spells.push(spell);showToast(`${name} added`);}
   updateBadge();
-  updateWizardSpellQuota();       // Refresh spellbook quota bar
+  updateSpellcasterQuota();       // Refresh spellcaster quota bar
   updatePendingChoicesNotification(); // Refresh FAB deficit count
   // Re-apply the active filters so search/school/level selections are preserved
   filterSpellPopup();
@@ -7450,6 +7874,12 @@ function toggleItem(category, name) {
       }
       showToast(`${name} removed`);
     } else {
+      // Check if this class needs a secondary feature selection (bloodline, domain, etc.)
+      const _cardReqErr = getClassRequirementError(name.toLowerCase());
+      if (_cardReqErr) {
+        openPrereqModal(name, item);
+        return;
+      }
       character.classes.push({ ...item, level: 1, archetypes: [] });
       // Auto-set favored if first class
       if (character.classes.length === 1) character.favoredClassIndex = 0;
@@ -11033,7 +11463,7 @@ function openDetailSync(category, item) {
         // Hard gate: ensure class requirements are met before adding
         const _reqErr = getClassRequirementError((name || '').toLowerCase());
         if (_reqErr) {
-          showToast(_reqErr, 'error');
+          openPrereqModal(name, item);
           return;
         }
         const archList = Object.entries(selectedArchetypes).map(([path, info]) => ({ path, ...info }));
@@ -12700,10 +13130,15 @@ function updatePendingChoicesNotification() {
   const fab = document.getElementById('pending-choices-fab');
   if (!fab) return;
 
-  // Check for wizard spell deficit too
-  const wizSpell = (typeof checkWizardSpellNotification === 'function') ? checkWizardSpellNotification() : null;
+  // Check for spellcaster spell deficits across all classes the character has
+  const ALL_TRACKED_CASTERS = ['wizard','magus','arcanist','sorcerer','bard','oracle','summoner','inquisitor','bloodrager'];
+  const spellDeficits = [];
+  for (const clsKey of ALL_TRACKED_CASTERS) {
+    const def = checkSpellcasterSpellNotification(clsKey);
+    if (def) spellDeficits.push({ clsKey, deficit: def.deficit });
+  }
 
-  if (!_lcQueue.length && !wizSpell) {
+  if (!_lcQueue.length && !spellDeficits.length) {
     fab.style.display = 'none';
     return;
   }
@@ -12736,17 +13171,39 @@ function updatePendingChoicesNotification() {
     </button>`;
   }).join('');
 
-  // Wizard spell notification — separate button that opens spell popup
-  if (wizSpell) {
-    buttonsHtml += `<button onclick="switchPage('spells');setTimeout(()=>openSpellPopup('Wizard'),200)"
-      style="background:linear-gradient(135deg,#4a7acc 0%,#2a4a8a 100%);color:#fff;border:none;border-radius:10px;
+  // Spell selection buttons — one per spellcaster class with a deficit
+  const SPELL_BTN_ICONS = { wizard:'📖', magus:'✨', arcanist:'📖', sorcerer:'🔥',
+    bard:'🎵', oracle:'🔮', summoner:'🌀', inquisitor:'⚖️', bloodrager:'💢' };
+  const SPELL_BTN_COLORS = {
+    wizard:   ['#4a7acc','#2a4a8a','rgba(74,122,204,0.3)'],
+    magus:    ['#7a4acc','#4a2a8a','rgba(122,74,204,0.3)'],
+    arcanist: ['#4a7acc','#2a4a8a','rgba(74,122,204,0.3)'],
+    sorcerer: ['#cc4a4a','#8a2a2a','rgba(204,74,74,0.3)'],
+    bard:     ['#cc884a','#8a5a2a','rgba(204,136,74,0.3)'],
+    oracle:   ['#8a4acc','#5a2a8a','rgba(138,74,204,0.3)'],
+    summoner: ['#4acc8a','#2a8a5a','rgba(74,204,138,0.3)'],
+    inquisitor:['#cc8a4a','#8a5a2a','rgba(204,138,74,0.3)'],
+    bloodrager:['#cc4a6a','#8a2a4a','rgba(204,74,106,0.3)'],
+  };
+  const SPELL_BTN_LABELS = {
+    wizard:'Spellbook', magus:'Spellbook', arcanist:'Spellbook',
+    sorcerer:'Sorcerer Spells', bard:'Bard Spells', oracle:'Oracle Spells',
+    summoner:'Summoner Spells', inquisitor:'Inquisitor Spells', bloodrager:'Bloodrager Spells',
+  };
+  for (const { clsKey, deficit } of spellDeficits) {
+    const displayName = clsKey.charAt(0).toUpperCase() + clsKey.slice(1);
+    const icon = SPELL_BTN_ICONS[clsKey] || '✨';
+    const [c1, c2, shadow] = SPELL_BTN_COLORS[clsKey] || ['#4a7acc','#2a4a8a','rgba(74,122,204,0.3)'];
+    const label = SPELL_BTN_LABELS[clsKey] || (displayName + ' Spells');
+    buttonsHtml += `<button onclick="switchPage('spells');setTimeout(()=>openSpellPopup('${displayName}'),200)"
+      style="background:linear-gradient(135deg,${c1} 0%,${c2} 100%);color:#fff;border:none;border-radius:10px;
              padding:0.7rem 1.2rem;font-family:Cinzel,serif;font-size:0.82rem;cursor:pointer;
-             box-shadow:0 4px 18px rgba(0,0,0,0.55),0 1px 3px rgba(74,122,204,0.3);
+             box-shadow:0 4px 18px rgba(0,0,0,0.55),0 1px 3px ${shadow};
              display:flex;align-items:center;gap:0.5rem;white-space:nowrap;letter-spacing:0.04em;
              transition:transform 0.15s,box-shadow 0.15s;"
       onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 7px 24px rgba(0,0,0,0.65)'"
-      onmouseout="this.style.transform='';this.style.boxShadow='0 4px 18px rgba(0,0,0,0.55)'">
-      <span style="font-size:1.1rem;">📖</span> Choose Wizard Spells! <span style="background:rgba(0,0,0,0.35);border-radius:10px;padding:1px 7px;font-size:0.75rem;">${wizSpell.deficit}</span>
+      onmouseout="this.style.transform='';this.style.boxShadow='0 4px 18px rgba(0,0,0,0.55),0 1px 3px ${shadow}'">
+      <span style="font-size:1.1rem;">${icon}</span> Choose ${label}! <span style="background:rgba(0,0,0,0.35);border-radius:10px;padding:1px 7px;font-size:0.75rem;">${deficit}</span>
     </button>`;
   }
   fab.innerHTML = buttonsHtml;
@@ -15584,109 +16041,434 @@ function renderCharacter() {
     container.appendChild(eqSection);
   }
 
-  // ── Spells / Formulae (level-grouped, spell card styling) ──────────────────
+  // ── Spells / Formulae — organized by class, with prepare mechanics ──────────
   {
-    const _extractClasses = new Set(['alchemist', 'investigator']);
-    const _isExtract = (character.classes || []).some(c =>
-      _extractClasses.has((c.name || c._name || '').toLowerCase().trim()));
-    const _spellSectionLabel = _isExtract ? 'Formulae' : 'Spells';
+    // ── Classification maps ───────────────────────────────────────────────────
+    // PREPARED_FULL: know ALL spells on list, choose which to prepare each day
+    const PREPARED_FULL_CLASSES = new Set([
+      'cleric','druid','paladin','ranger','hunter','warpriest','shaman'
+    ]);
+    // PREPARED_SPELLBOOK: record spells in book, prepare a subset each day
+    const PREPARED_BOOK_CLASSES = new Set([
+      'wizard','magus','arcanist','alchemist','investigator','witch'
+    ]);
+    // SPONTANEOUS: know fixed # of spells, cast any without preparing
+    const SPONTANEOUS_CLASSES_SET = new Set([
+      'sorcerer','bard','oracle','summoner','inquisitor','bloodrager','skald'
+    ]);
+
+    const _extractClasses  = new Set(['alchemist','investigator']);
+    const _allSpellClasses = new Set([
+      ...PREPARED_FULL_CLASSES, ...PREPARED_BOOK_CLASSES, ...SPONTANEOUS_CLASSES_SET
+    ]);
+
+    // All spellcasting classes the character actually has
+    const charSpellClasses = (character.classes || []).filter(c =>
+      _allSpellClasses.has((c.name || c._name || '').toLowerCase().trim())
+    );
 
     const spSection = document.createElement('div');
     spSection.className = 'char-section';
-    spSection.innerHTML = `<div class="char-section-title">${_spellSectionLabel}</div>`;
+    spSection.innerHTML = '<div class="char-section-title">Spells</div>';
 
-    if (!character.spells.length) {
-      spSection.innerHTML += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:1.5rem;opacity:0.5;text-align:center;"><div style="color:var(--text-muted);font-size:0.9rem;">No ${_spellSectionLabel.toLowerCase()} selected</div></div>`;
-    } else {
-      // Determine spellcasting class for color/icon theming
-      const _scSet = new Set(['wizard','sorcerer','cleric','druid','bard','paladin','ranger','oracle','witch','magus','summoner','inquisitor','alchemist','investigator']);
-      const _charScCls = (character.classes || []).find(c => _scSet.has((c.name||c._name||'').toLowerCase().trim()));
-      const _spClsKey = (_charScCls ? (_charScCls.name || _charScCls._name) : '').toLowerCase().trim();
-      const _spColor = CLASS_COLORS[_spClsKey] || ARCANE_COLOR;
+    if (!charSpellClasses.length && !character.spells.length) {
+      spSection.innerHTML += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:1.5rem;opacity:0.5;text-align:center;"><div style="color:var(--text-muted);font-size:0.9rem;">No spellcasting classes</div></div>`;
+      container.appendChild(spSection);
+      return;
+    }
 
-      // Helper: get spell level for this character's class(es)
-      const getSpLvl = spell => {
-        if (typeof spell._class_level === 'number') return spell._class_level;
-        if (spell.levels && spell.levels.length) {
-          for (const cls of (character.classes || [])) {
-            const cn = (cls.name || cls._name || '').toLowerCase();
-            const m = spell.levels.find(l => l.class && l.class.toLowerCase() === cn);
-            if (m) return m.level;
-          }
-          return spell.levels[0].level;
-        }
-        return 0;
-      };
+    // ── Helper: get spell level for a given class ─────────────────────────────
+    const getSpLvlForClass = (spell, clsKey) => {
+      if (clsKey && spell.levels && spell.levels.length) {
+        const m = spell.levels.find(l => l.class && l.class.toLowerCase() === clsKey);
+        if (m != null) return m.level;
+      }
+      if (typeof spell._class_level === 'number') return spell._class_level;
+      if (spell.levels && spell.levels.length) return spell.levels[0].level;
+      return 0;
+    };
 
-      // Group spells by level
-      const byLevel = {};
-      for (const spell of character.spells) {
-        const lvl = getSpLvl(spell);
-        (byLevel[lvl] || (byLevel[lvl] = [])).push(spell);
+    // ── Helper: ordinal label ─────────────────────────────────────────────────
+    const ordLabel = n => ['Cantrips / Orisons','1st','2nd','3rd','4th','5th','6th','7th','8th','9th'][n] || `${n}th`;
+    const ordLabelFull = (n, isExtract) => {
+      if (isExtract) return n === 0 ? '1st-Level Formulae' : `${ordLabel(n)}-Level Formulae`;
+      return n === 0 ? 'Cantrips / Orisons' : `${ordLabel(n)}-Level Spells`;
+    };
+
+    // ── Prepared spell helpers ────────────────────────────────────────────────
+    // character.preparedSpells = { 'wizard': { 'Fireball': 1 }, 'cleric': { 'Cure Light Wounds': 1 }, ... }
+    const _isPrepared = (clsKey, spellName) =>
+      !!((character.preparedSpells || {})[clsKey] || {})[spellName];
+
+    const _togglePrepared = (clsKey, spellName) => {
+      if (!character.preparedSpells) character.preparedSpells = {};
+      if (!character.preparedSpells[clsKey]) character.preparedSpells[clsKey] = {};
+      const cur = character.preparedSpells[clsKey][spellName] || 0;
+      character.preparedSpells[clsKey][spellName] = cur > 0 ? 0 : 1;
+      renderCharacter();
+    };
+
+    const _clearPrepared = (clsKey) => {
+      if (character.preparedSpells) character.preparedSpells[clsKey] = {};
+      renderCharacter();
+    };
+
+    // ── Render one class's spell block ────────────────────────────────────────
+    const renderSpellClassBlock = (cls, allCharSpells) => {
+      const clsName  = cls.name || cls._name || '';
+      const clsKey   = clsName.toLowerCase().trim();
+      const clsColor = CLASS_COLORS[clsKey] || ARCANE_COLOR;
+      const clsIcon  = CLASS_ICONS[clsKey]  || '✨';
+      const isExtract   = _extractClasses.has(clsKey);
+      const isPrepFull  = PREPARED_FULL_CLASSES.has(clsKey);
+      const isPrepBook  = PREPARED_BOOK_CLASSES.has(clsKey);
+      const isSpontan   = SPONTANEOUS_CLASSES_SET.has(clsKey);
+
+      // Spells belonging to this class
+      const clsSpells = allCharSpells.filter(spell => {
+        if (spell.levels && spell.levels.length)
+          return spell.levels.some(l => l.class && l.class.toLowerCase() === clsKey);
+        // Fallback: assign to first spellcasting class
+        return charSpellClasses.length > 0 &&
+          clsKey === (charSpellClasses[0].name || charSpellClasses[0]._name || '').toLowerCase();
+      });
+
+      const block = document.createElement('div');
+      block.style.cssText = 'margin-bottom:1.25rem;';
+
+      // ── Class header ──────────────────────────────────────────────────────
+      const header = document.createElement('div');
+      header.style.cssText = `display:flex;align-items:center;gap:0.6rem;padding:0.55rem 1rem;background:${clsColor}22;border:1px solid ${clsColor}44;border-radius:8px 8px 0 0;flex-wrap:wrap;`;
+
+      const headerLeft = document.createElement('div');
+      headerLeft.style.cssText = 'display:flex;align-items:center;gap:0.6rem;flex:1;';
+      headerLeft.innerHTML = `
+        <span style="font-size:1.4rem;">${clsIcon}</span>
+        <span style="font-family:'Cinzel Decorative',serif;font-size:0.9rem;color:#fff;">${clsName}</span>
+        <span style="font-family:Cinzel,serif;font-size:0.65rem;color:var(--text-muted);">
+          ${isPrepFull ? '— Prepared (Full List)' : isPrepBook ? (isExtract ? '— Formula Book' : '— Spellbook') : '— Spontaneous'}
+        </span>`;
+      header.appendChild(headerLeft);
+
+      const headerBtns = document.createElement('div');
+      headerBtns.style.cssText = 'display:flex;gap:0.4rem;align-items:center;';
+
+      // "Prepare Spells" button for full-list prepared classes
+      if (isPrepFull) {
+        const prepBtn = document.createElement('button');
+        prepBtn.className = 'card-btn';
+        prepBtn.style.cssText = `font-size:0.7rem;padding:3px 10px;background:${clsColor}33;border-color:${clsColor}88;`;
+        prepBtn.innerHTML = '🌅 Prepare Spells';
+        prepBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          openPrepareFullModal(clsKey, clsName, clsColor);
+        });
+        headerBtns.appendChild(prepBtn);
       }
 
+      // "View Spells" → spell popup
+      const viewBtn = document.createElement('button');
+      viewBtn.className = 'card-btn';
+      viewBtn.style.cssText = 'font-size:0.7rem;padding:3px 10px;';
+      viewBtn.textContent = isExtract ? 'View Formulae' : 'View Spells';
+      viewBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        switchPage('spells');
+        setTimeout(() => openSpellPopup(clsName), 200);
+      });
+      headerBtns.appendChild(viewBtn);
+      header.appendChild(headerBtns);
+      block.appendChild(header);
+
+      // ── Body ──────────────────────────────────────────────────────────────
+      const body = document.createElement('div');
+      body.style.cssText = `border:1px solid ${clsColor}33;border-top:none;border-radius:0 0 8px 8px;overflow:hidden;`;
+
       const savedClass = currentSpellClass;
-      currentSpellClass = _spClsKey;
+      currentSpellClass = clsName;
 
-      for (const lvl of Object.keys(byLevel).map(Number).sort((a,b)=>a-b)) {
-        const spells = byLevel[lvl];
-        const lvlLabel = lvl === 0 ? (_isExtract ? '1st-Level Formulae' : 'Cantrips / Orisons') : (_isExtract ? `${['','1st','2nd','3rd','4th','5th','6th'][lvl]||lvl+'th'}-Level Formulae` : `Level ${lvl}`);
-        const lvlColor = _spColor;
-
-        // Collapsible level group
-        const details = document.createElement('details');
-        details.open = true;
-        details.style.cssText = 'margin-bottom:0.5rem;border:1px solid var(--border);border-radius:8px;overflow:hidden;';
-
-        const summary = document.createElement('summary');
-        summary.style.cssText = `list-style:none;display:flex;align-items:center;gap:0.6rem;padding:0.6rem 1rem;background:${lvlColor}1a;border-bottom:1px solid ${lvlColor}44;cursor:pointer;font-family:Cinzel,serif;font-size:0.78rem;color:var(--gold-light);letter-spacing:0.07em;user-select:none;`;
-        summary.innerHTML = `<span class="sp-lvl-arrow" style="color:${lvlColor};font-size:0.9rem;">▾</span><span>${lvlLabel}</span><span style="margin-left:auto;font-size:0.65rem;color:var(--text-muted);">${spells.length} spell${spells.length!==1?'s':''}</span>`;
-        details.addEventListener('toggle', () => {
-          const arr = summary.querySelector('.sp-lvl-arrow');
-          if (arr) arr.textContent = details.open ? '▾' : '▸';
-        });
-
-        const grid = document.createElement('div');
-        grid.className = 'char-card-grid';
-        grid.style.padding = '0.75rem';
-
-        for (const spell of spells) {
-          const spName = spell.name || spell._name;
-          const cardEl = createSpellCard(spell);
-          // Hide built-in btn; use X overlay for removal
-          cardEl.querySelectorAll('.card-btn').forEach(b => { b.style.display = 'none'; });
-
-          // Remove overlay
-          const spWrapper = document.createElement('div');
-          spWrapper.style.cssText = 'position:relative;padding-top:10px;padding-right:10px;';
-          const spRm = document.createElement('button');
-          spRm.title = 'Remove';
-          spRm.style.cssText = 'position:absolute;top:0;right:0;z-index:10;width:26px;height:26px;border-radius:50%;background:var(--red-accent);border:2px solid var(--bg-deep);color:#fff;font-size:0.75rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.15s,background 0.15s;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
-          spRm.textContent = '✕';
-          spRm.addEventListener('mouseenter', () => { spRm.style.transform='scale(1.15)'; spRm.style.background='#d64a3a'; });
-          spRm.addEventListener('mouseleave', () => { spRm.style.transform='scale(1)'; spRm.style.background='var(--red-accent)'; });
-          spRm.addEventListener('click', e => {
-            e.stopPropagation();
-            character.spells = character.spells.filter(s => (s.name||s._name) !== spName);
-            updateBadge(); renderCharacter();
-          });
-          spWrapper.appendChild(cardEl);
-          spWrapper.appendChild(spRm);
-          grid.appendChild(spWrapper);
+      if (!clsSpells.length && !isPrepFull) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:1rem;text-align:center;color:var(--text-muted);font-size:0.85rem;opacity:0.7;';
+        empty.textContent = isExtract
+          ? 'No formulae recorded. Visit the Spells tab to add.'
+          : (isSpontan
+            ? 'No spells chosen. Visit the Spells tab to add.'
+            : 'No spells in spellbook. Visit the Spells tab to add.');
+        body.appendChild(empty);
+      } else {
+        // For prepared-full with no manually-added spells: show instructional note
+        if (isPrepFull && !clsSpells.length) {
+          const prepNote = document.createElement('div');
+          prepNote.style.cssText = `padding:1rem 1.25rem;background:${clsColor}0d;`;
+          prepNote.innerHTML = `
+            <div style="font-family:Cinzel,serif;font-size:0.78rem;color:${clsColor};margin-bottom:0.35rem;">Daily Preparation</div>
+            <div style="font-size:0.82rem;color:var(--text-secondary);line-height:1.55;">
+              <strong>${clsName}s</strong> know <em>all</em> spells on their class list automatically.
+              Use <strong>🌅 Prepare Spells</strong> above to mark which spells you've prepared for today.
+            </div>`;
+          body.appendChild(prepNote);
         }
 
-        details.appendChild(summary);
-        details.appendChild(grid);
-        spSection.appendChild(details);
+        // Group spells by level and render
+        const byLevel = {};
+        for (const spell of clsSpells) {
+          const lvl = getSpLvlForClass(spell, clsKey);
+          (byLevel[lvl] || (byLevel[lvl] = [])).push(spell);
+        }
+
+        for (const lvl of Object.keys(byLevel).map(Number).sort((a,b)=>a-b)) {
+          const spells = byLevel[lvl];
+          const lvlLabel = ordLabelFull(lvl, isExtract);
+
+          // Count prepared in this level
+          const prepd_count = isPrepBook
+            ? spells.filter(s => _isPrepared(clsKey, s.name || s._name)).length
+            : 0;
+
+          const details = document.createElement('details');
+          details.open = true;
+          details.style.cssText = 'border-bottom:1px solid rgba(255,255,255,0.06);';
+
+          const summary = document.createElement('summary');
+          summary.style.cssText = `list-style:none;display:flex;align-items:center;gap:0.6rem;padding:0.5rem 1rem;background:${clsColor}11;cursor:pointer;font-family:Cinzel,serif;font-size:0.75rem;color:var(--gold-light);letter-spacing:0.06em;user-select:none;`;
+          const prepBadge = isPrepBook
+            ? `<span style="font-size:0.62rem;color:${prepd_count>0?'#6abf7a':'var(--text-muted)'};margin-left:0.35rem;">${prepd_count}/${spells.length} prepared</span>`
+            : '';
+          summary.innerHTML = `<span class="sp-lvl-arrow" style="color:${clsColor};font-size:0.85rem;">▾</span><span>${lvlLabel}</span>${prepBadge}<span style="margin-left:auto;font-size:0.62rem;color:var(--text-muted);">${spells.length} spell${spells.length!==1?'s':''}</span>`;
+          details.addEventListener('toggle', () => {
+            const arr = summary.querySelector('.sp-lvl-arrow');
+            if (arr) arr.textContent = details.open ? '▾' : '▸';
+          });
+
+          const grid = document.createElement('div');
+          grid.className = 'char-card-grid';
+          grid.style.padding = '0.6rem 0.75rem';
+
+          for (const spell of spells) {
+            const spName     = spell.name || spell._name;
+            const spLvlNum   = getSpLvlForClass(spell, clsKey);
+            const cardEl     = createSpellCard(spell);
+            cardEl.querySelectorAll('.card-btn').forEach(b => { b.style.display='none'; });
+
+            const spWrapper  = document.createElement('div');
+            spWrapper.style.cssText = 'position:relative;padding-top:10px;padding-right:10px;';
+
+            // ── Remove button (✕) — not for prepared-full (they use the modal) ──
+            if (!isPrepFull) {
+              const spRm = document.createElement('button');
+              spRm.title = 'Remove';
+              spRm.style.cssText = 'position:absolute;top:0;right:0;z-index:10;width:26px;height:26px;border-radius:50%;background:var(--red-accent);border:2px solid var(--bg-deep);color:#fff;font-size:0.75rem;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:transform 0.15s,background 0.15s;box-shadow:0 2px 8px rgba(0,0,0,0.5);';
+              spRm.textContent = '✕';
+              spRm.addEventListener('mouseenter', () => { spRm.style.transform='scale(1.15)'; spRm.style.background='#d64a3a'; });
+              spRm.addEventListener('mouseleave', () => { spRm.style.transform='scale(1)'; spRm.style.background='var(--red-accent)'; });
+              spRm.addEventListener('click', e => {
+                e.stopPropagation();
+                character.spells = character.spells.filter(s => (s.name||s._name) !== spName);
+                if (character.preparedSpells && character.preparedSpells[clsKey])
+                  delete character.preparedSpells[clsKey][spName];
+                updateBadge(); renderCharacter();
+              });
+              spWrapper.appendChild(spRm);
+            }
+
+            // ── Prepare toggle (spellbook classes) ────────────────────────
+            if (isPrepBook) {
+              const isCantrip    = spLvlNum === 0;
+              const alwaysPrepCls = new Set(['wizard','arcanist']);
+              const autoPrep     = isCantrip && alwaysPrepCls.has(clsKey);
+
+              cardEl.style.paddingBottom = '2.1rem';
+
+              if (autoPrep) {
+                const badge = document.createElement('span');
+                badge.style.cssText = 'position:absolute;bottom:8px;left:8px;z-index:10;font-family:Cinzel,serif;font-size:0.6rem;padding:2px 9px;border-radius:4px;background:rgba(106,191,122,0.15);border:1px solid rgba(106,191,122,0.4);color:#6abf7a;';
+                badge.textContent = '✓ Always Prepared';
+                spWrapper.appendChild(badge);
+              } else {
+                const isPrep = _isPrepared(clsKey, spName);
+                const prepToggle = document.createElement('button');
+                prepToggle.style.cssText = `position:absolute;bottom:8px;left:8px;z-index:10;font-family:Cinzel,serif;font-size:0.62rem;padding:2px 9px;border-radius:4px;cursor:pointer;border:1px solid ${isPrep?'#6abf7a88':clsColor+'55'};background:${isPrep?'rgba(106,191,122,0.18)':clsColor+'18'};color:${isPrep?'#6abf7a':'var(--text-muted)'};transition:all 0.15s;`;
+                prepToggle.textContent = isPrep ? '✓ Prepared' : 'Prepare';
+                prepToggle.title = isPrep ? 'Click to un-prepare' : 'Click to mark as prepared for today';
+                prepToggle.addEventListener('click', e => {
+                  e.stopPropagation();
+                  _togglePrepared(clsKey, spName);
+                });
+                spWrapper.appendChild(prepToggle);
+              }
+            }
+
+            spWrapper.insertBefore(cardEl, spWrapper.firstChild);
+            grid.appendChild(spWrapper);
+          }
+
+          details.appendChild(summary);
+          details.appendChild(grid);
+          body.appendChild(details);
+        }
+
+        // Prepared-full: show today's prepared list at bottom if any
+        if (isPrepFull) {
+          const preparedNames = Object.entries((character.preparedSpells || {})[clsKey] || {})
+            .filter(([,v]) => v > 0).map(([k]) => k);
+          if (preparedNames.length > 0) {
+            const ps = document.createElement('div');
+            ps.style.cssText = 'padding:0.75rem 1rem;background:rgba(106,191,122,0.07);border-top:1px solid rgba(106,191,122,0.22);';
+            ps.innerHTML = `
+              <div style="font-family:Cinzel,serif;font-size:0.7rem;color:#6abf7a;margin-bottom:0.4rem;">✓ Today's Prepared Spells — ${preparedNames.length}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-bottom:0.5rem;">
+                ${preparedNames.map(n=>`<span style="font-size:0.7rem;padding:2px 8px;background:rgba(106,191,122,0.15);border:1px solid rgba(106,191,122,0.35);border-radius:4px;color:#6abf7a;">${n}</span>`).join('')}
+              </div>`;
+            const clearBtn = document.createElement('button');
+            clearBtn.style.cssText = 'font-family:Cinzel,serif;font-size:0.65rem;padding:2px 10px;border-radius:4px;background:rgba(200,80,80,0.12);border:1px solid rgba(200,80,80,0.4);color:var(--red-accent);cursor:pointer;';
+            clearBtn.textContent = 'Clear Prepared';
+            clearBtn.addEventListener('click', () => _clearPrepared(clsKey));
+            ps.appendChild(clearBtn);
+            body.appendChild(ps);
+          }
+        }
       }
 
       currentSpellClass = savedClass;
+      block.appendChild(body);
+      return block;
+    };
+
+    // ── Render all spellcasting classes ───────────────────────────────────────
+    if (!charSpellClasses.length) {
+      spSection.innerHTML += `<div style="background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:1.5rem;opacity:0.5;text-align:center;"><div style="color:var(--text-muted);font-size:0.9rem;">No spellcasting classes selected</div></div>`;
+    } else {
+      for (const cls of charSpellClasses) {
+        spSection.appendChild(renderSpellClassBlock(cls, character.spells));
+      }
     }
 
     container.appendChild(spSection);
   }
 }
 
+// ── Prepare Spells modal (for full-list prepared classes: Cleric, Druid, etc.) ─
+// Opens a searchable checklist of every spell on the class list.
+// The player checks off what they've prepared for the day.
+async function openPrepareFullModal(clsKey, clsName, clsColor) {
+  // Remove old modal if present
+  const old = document.getElementById('prepare-full-modal');
+  if (old) old.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'prepare-full-modal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.78);padding:1rem;';
+  modal.innerHTML = `
+    <div style="background:var(--bg-card);border:1px solid ${clsColor}55;border-radius:12px;width:100%;max-width:680px;max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,0.7);">
+      <div style="padding:1rem 1.25rem;border-bottom:1px solid var(--border);background:${clsColor}22;display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
+        <div style="flex:1;">
+          <div style="font-family:'Cinzel Decorative',serif;font-size:1rem;color:#fff;">🌅 Prepare ${clsName} Spells</div>
+          <div style="font-family:Cinzel,serif;font-size:0.68rem;color:var(--text-muted);margin-top:2px;">Check spells to prepare for today. Uncheck to free the slot.</div>
+        </div>
+        <button id="pfm-close" style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text-secondary);padding:4px 12px;cursor:pointer;font-size:0.85rem;font-family:Cinzel,serif;">✕ Done</button>
+      </div>
+      <div style="padding:0.65rem 1rem;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+        <input id="pfm-search" type="text" placeholder="Search spells…" style="flex:1;min-width:130px;padding:5px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-deep);color:var(--text-primary);font-size:0.82rem;">
+        <select id="pfm-level" style="padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-deep);color:var(--text-primary);font-size:0.82rem;">
+          <option value="">All Levels</option>
+          ${[...Array(10).keys()].map(i=>`<option value="${i}">${i===0?'Cantrips/Orisons':'Level '+i}</option>`).join('')}
+        </select>
+        <button id="pfm-clear-btn" style="font-family:Cinzel,serif;font-size:0.7rem;padding:4px 12px;border-radius:6px;background:rgba(200,80,80,0.15);border:1px solid rgba(200,80,80,0.4);color:var(--red-accent);cursor:pointer;">Clear All</button>
+      </div>
+      <div id="pfm-slots" style="padding:0.4rem 1rem;border-bottom:1px solid var(--border);flex-shrink:0;font-family:Cinzel,serif;font-size:0.7rem;color:var(--text-muted);min-height:1.8rem;"></div>
+      <div id="pfm-list" style="overflow-y:auto;flex:1;padding:0.6rem;display:flex;flex-direction:column;gap:0.3rem;"></div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  // Close handlers
+  modal.querySelector('#pfm-close').addEventListener('click', () => { modal.remove(); renderCharacter(); });
+  modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); renderCharacter(); } });
+
+  // Store state on modal
+  modal._pfmClsKey   = clsKey;
+  modal._pfmClsName  = clsName;
+  modal._pfmColor    = clsColor;
+
+  // Load spells
+  modal.querySelector('#pfm-list').innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-muted);">Loading…</div>';
+  const spells = loadSpellsForClassFromIndex(clsName);
+  spells.sort((a,b) => {
+    const la = a.levels?.find(l=>l.class?.toLowerCase()===clsKey)?.level ?? (a._class_level ?? 99);
+    const lb = b.levels?.find(l=>l.class?.toLowerCase()===clsKey)?.level ?? (b._class_level ?? 99);
+    return la !== lb ? la - lb : (a.name||'').localeCompare(b.name||'');
+  });
+  modal._pfmSpells = spells;
+
+  // Wire up search/filter/clear
+  modal.querySelector('#pfm-search').addEventListener('input', () => pfmRender(modal));
+  modal.querySelector('#pfm-level').addEventListener('change', () => pfmRender(modal));
+  modal.querySelector('#pfm-clear-btn').addEventListener('click', () => {
+    if (!character.preparedSpells) character.preparedSpells = {};
+    character.preparedSpells[clsKey] = {};
+    pfmRender(modal);
+  });
+
+  pfmRender(modal);
+}
+
+function pfmRender(modal) {
+  if (!modal || !modal._pfmSpells) return;
+  const clsKey   = modal._pfmClsKey;
+  const clsColor = modal._pfmColor;
+  const search   = (modal.querySelector('#pfm-search')?.value || '').toLowerCase();
+  const levelFil = modal.querySelector('#pfm-level')?.value;
+  const list     = modal.querySelector('#pfm-list');
+  if (!list) return;
+
+  let spells = modal._pfmSpells;
+  if (search) spells = spells.filter(s =>
+    (s.name||'').toLowerCase().includes(search) || (s.description||'').toLowerCase().includes(search));
+  if (levelFil !== '') spells = spells.filter(s => {
+    const lv = s.levels?.find(l=>l.class?.toLowerCase()===clsKey)?.level ?? (s._class_level ?? 0);
+    return String(lv) === levelFil;
+  });
+
+  // Update slot count
+  const slotsEl = modal.querySelector('#pfm-slots');
+  if (slotsEl) {
+    const prepCount = Object.values((character.preparedSpells||{})[clsKey]||{}).filter(v=>v>0).length;
+    slotsEl.textContent = `${prepCount} spell${prepCount!==1?'s':''} prepared today`;
+  }
+
+  list.innerHTML = '';
+  if (!spells.length) {
+    list.innerHTML = '<div style="padding:1rem;text-align:center;color:var(--text-muted);font-size:0.85rem;">No spells found</div>';
+    return;
+  }
+
+  for (const spell of spells) {
+    const spName = spell.name || spell._name || '';
+    const spLvl  = spell.levels?.find(l=>l.class?.toLowerCase()===clsKey)?.level ?? (spell._class_level ?? '?');
+    const spDesc = (spell.description||'').replace(/<[^>]+>/g,'').substring(0,110);
+    const isPrep = !!((character.preparedSpells||{})[clsKey]||{})[spName];
+
+    const row = document.createElement('div');
+    row.style.cssText = `display:flex;align-items:center;gap:0.65rem;padding:0.5rem 0.75rem;border-radius:6px;border:1px solid ${isPrep?clsColor+'66':'var(--border)'};background:${isPrep?clsColor+'18':'var(--bg-deep)'};cursor:pointer;transition:all 0.13s;`;
+    row.innerHTML = `
+      <span style="font-size:1.1rem;flex-shrink:0;line-height:1;">${isPrep?'✅':'⬜'}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="font-family:Cinzel,serif;font-size:0.8rem;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${spName}</div>
+        <div style="font-size:0.68rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${spDesc}${spDesc.length>=110?'…':''}</div>
+      </div>
+      <span style="font-family:Cinzel,serif;font-size:0.63rem;padding:1px 7px;border-radius:3px;background:${clsColor}22;border:1px solid ${clsColor}55;color:${clsColor};flex-shrink:0;">Lvl ${spLvl}</span>`;
+    row.addEventListener('mouseenter', () => { if (!isPrep) row.style.background = clsColor+'0d'; });
+    row.addEventListener('mouseleave', () => { row.style.background = isPrep ? clsColor+'18' : 'var(--bg-deep)'; });
+    row.addEventListener('click', () => {
+      if (!character.preparedSpells) character.preparedSpells = {};
+      if (!character.preparedSpells[clsKey]) character.preparedSpells[clsKey] = {};
+      const cur = character.preparedSpells[clsKey][spName] || 0;
+      character.preparedSpells[clsKey][spName] = cur > 0 ? 0 : 1;
+      pfmRender(modal);
+    });
+    list.appendChild(row);
+  }
+}
 // ─── Nav Tab Gating ───────────────────────────────────────────────────────────
 // Tabs are gated in tiers until prerequisites are met:
 //   Always available:  Races, Classes, Character
@@ -15828,46 +16610,6 @@ function toggleNavLock() {
     btn.title = _navLockOverride ? 'Tabs unlocked — click to re-enable gating' : 'Unlock all tabs regardless of prerequisites';
   }
   updateNavTabGating();
-}
-
-// ─── Wizard Spell Selection FAB ──────────────────────────────────────────────
-// Wizard spellbook: Level 1 = all cantrips + 3 + Int mod 1st-level spells.
-// Each level up = +2 free spells of any level they can cast.
-const WIZARD_SPELLS_PER_LEVEL = {
-  1: { cantrips: 'all', newSpells: 3 },  // 3 + Int mod (Int mod handled at runtime)
-};
-// For levels 2-20, wizards gain 2 free spells on level-up
-for (let lvl = 2; lvl <= 20; lvl++) WIZARD_SPELLS_PER_LEVEL[lvl] = { newSpells: 2 };
-
-function checkWizardSpellNotification() {
-  // Check if character has a Wizard class
-  const wizCls = (character.classes || []).find(c =>
-    (c.name || c._name || '').toLowerCase().trim() === 'wizard');
-  if (!wizCls) return null;
-
-  const wizLevel = parseInt(wizCls.level) || 1;
-  const rawInt = (character.stats || {}).int || 10;
-  const intBonus = (typeof getTotalBonus === 'function') ? getTotalBonus('int') : 0;
-  const intMod = Math.max(0, Math.floor(((rawInt + intBonus) - 10) / 2));
-
-  // Expected total spells known for wizard at this level
-  // Level 1: 3 + Int mod first-level spells (cantrips are free / all known)
-  // Each subsequent level: +2 spells
-  let expectedSpells = 3 + intMod; // level 1 base
-  for (let lvl = 2; lvl <= wizLevel; lvl++) expectedSpells += 2;
-
-  // Count wizard spells the character has (exclude cantrips — level 0)
-  const wizardSpells = (character.spells || []).filter(s => {
-    // Only count non-cantrip spells (cantrips are automatically known)
-    const spellLevel = s._class_level ?? s.level ?? null;
-    if (spellLevel === 0 || spellLevel === '0') return false;
-    return true;
-  }).length;
-
-  if (wizardSpells < expectedSpells) {
-    return { deficit: expectedSpells - wizardSpells, className: 'Wizard' };
-  }
-  return null;
 }
 
 // Switch page
@@ -16252,6 +16994,318 @@ function _formatDate(ts) {
          d.toLocaleTimeString(undefined, { hour:'2-digit', minute:'2-digit' });
 }
 
+// ── Prerequisite pick modal ────────────────────────────────────────────────────
+let _prereqModalState = { item: null, className: '', picks: [], required: 0, selected: [] };
+
+async function openPrereqModal(className, item) {
+  const sfConfig = CLASS_SECONDARY_TYPES[className.toLowerCase().trim()];
+  if (!sfConfig) return;
+  const { label, subtype, pick } = sfConfig;
+
+  const alreadyHave = Object.values(selectedSecondaryFeatures)
+    .filter(sf => sf.subtype === subtype && !sf.parentSectionId).length;
+  const need = pick - alreadyHave;
+
+  // Show modal immediately with a loading state
+  document.getElementById('prereq-modal-title').textContent = `Choose ${label}${pick > 1 ? 's' : ''}`;
+  document.getElementById('prereq-modal-subtitle').textContent =
+    `${className} requires ${pick > 1 ? pick + ' ' + label + 's' : 'a ' + label}. ` +
+    (need < pick ? `You already have ${alreadyHave}; pick ${need} more.` : `Pick ${need} to continue.`);
+  document.getElementById('prereq-modal-list').innerHTML =
+    `<div style="padding:1.5rem;text-align:center;color:var(--text-secondary);font-family:Cinzel,serif;font-size:0.8rem;">Loading ${label}s…</div>`;
+  document.getElementById('prereq-modal-confirm').disabled = true;
+  document.getElementById('prereq-modal-confirm').textContent = 'Add to Character';
+  document.getElementById('prereq-modal-backdrop').classList.add('open');
+
+  _prereqModalState = { item, className, label, subtype, pick, need, selected: [] };
+
+  // Load full class data to get secondary feature sections
+  let options = [];
+  try {
+    // Try DOM first (detail page already open for this class)
+    const domOptions = _getPrereqOptionsFromDom(subtype);
+    if (domOptions.length) {
+      options = domOptions;
+    } else {
+      // Load from DB
+      const full = await loadFullDetail(item);
+      options = _getPrereqOptionsFromData(full, subtype);
+    }
+  } catch(e) {
+    console.warn('prereqModal load error', e);
+  }
+
+  if (!options.length) {
+    document.getElementById('prereq-modal-list').innerHTML =
+      `<div style="padding:1.5rem;text-align:center;color:var(--text-secondary);font-family:Cinzel,serif;font-size:0.88rem;">
+        No ${label} options found. Open the class detail page and select a ${label} there first.
+      </div>`;
+    return;
+  }
+
+  _prereqModalState.options = options;
+  _renderPrereqOptions();
+}
+
+function _getPrereqOptionsFromDom(subtype) {
+  // Read options from rendered sf-check checkboxes on the detail page
+  const options = [];
+  document.querySelectorAll('input[id^="sf-check-"]').forEach(cb => {
+    const onch = cb.getAttribute('onchange') || '';
+    const match = onch.match(/toggleSecondaryFeature\((\d+),'([^']+)','([^']+)',/);
+    if (!match) return;
+    const [, sid, name, cbSubtype] = match;
+    if (cbSubtype !== subtype) return;
+    if (selectedSecondaryFeatures[parseInt(sid)]) return;
+    // Try to grab the rendered body HTML from the existing DOM row
+    const bodyEl = document.getElementById('sf-row-' + sid);
+    options.push({ sid: parseInt(sid), name, fromDom: true,
+      section: null, bodyHtml: bodyEl ? bodyEl.innerHTML : null,
+      classSkills: (cb.getAttribute('data-sf-skills') || '').split('||').filter(Boolean),
+      bonusSpells: cb.getAttribute('data-sf-spells') || '' });
+  });
+  return options;
+}
+
+function _getPrereqOptionsFromData(full, subtype) {
+  const options = [];
+  const seen = new Set();
+  function walk(sections) {
+    for (const s of (sections || [])) {
+      if (!s || s.type === 'link') continue;
+      if ((s.subtype || '') === subtype && s.name && s.section_id) {
+        if (!seen.has(s.section_id)) {
+          seen.add(s.section_id);
+          options.push({ sid: s.section_id, name: s.name, fromDom: false,
+            section: s, bodyHtml: null, classSkills: [], bonusSpells: '' });
+        }
+      }
+      walk(s.sections);
+    }
+  }
+  walk(full.sections);
+  return options;
+}
+
+function _renderPrereqOptions() {
+  const { options, item } = _prereqModalState;
+  const classColor = item ? getClassColor(item) : 'var(--gold)';
+  const list = document.getElementById('prereq-modal-list');
+  list.innerHTML = '';
+
+  for (const opt of options) {
+    // Wrapper — no overflow:hidden so expanded body is never clipped
+    const wrapper = document.createElement('div');
+    wrapper.className = 'prereq-row';
+    wrapper.dataset.sid = opt.sid;
+    wrapper.style.cssText = `border:1px solid var(--border);border-left:3px solid ${classColor}66;border-radius:0 6px 6px 0;`;
+
+    // ── Header: two separate click zones side-by-side ──────────────────────
+    const header = document.createElement('div');
+    header.className = 'prereq-row-header';
+    header.style.cssText = 'display:flex;align-items:stretch;';
+
+    // LEFT ZONE — circle only. Click = select/deselect.
+    const selectZone = document.createElement('div');
+    selectZone.className = 'prereq-select-zone';
+    selectZone.style.cssText = 'display:flex;align-items:center;padding:0.6rem 0.85rem;flex-shrink:0;border-right:1px solid var(--border);cursor:pointer;';
+    const circle = document.createElement('div');
+    circle.className = 'prereq-circle';
+    circle.style.cssText = 'width:18px;height:18px;border-radius:50%;border:2px solid var(--border);display:flex;align-items:center;justify-content:center;transition:all 0.15s;background:transparent;flex-shrink:0;';
+    selectZone.appendChild(circle);
+    selectZone.addEventListener('click', () => _togglePrereqOption(opt.sid, wrapper, circle));
+
+    // RIGHT ZONE — name + chevron. Click = expand/collapse body.
+    const expandZone = document.createElement('div');
+    expandZone.style.cssText = 'flex:1;display:flex;align-items:center;gap:0.6rem;padding:0.6rem 0.9rem;background:var(--bg-card);cursor:pointer;transition:background 0.15s;border-radius:0 6px 0 0;min-width:0;';
+    expandZone.onmouseover = () => expandZone.style.background = 'var(--bg-hover)';
+    expandZone.onmouseout  = () => expandZone.style.background = 'var(--bg-card)';
+
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'flex:1;font-family:Cinzel,serif;font-size:0.84rem;color:var(--text-primary);';
+    nameEl.textContent = opt.name;
+
+    const chevron = document.createElement('span');
+    chevron.style.cssText = 'color:var(--text-muted);font-size:0.7rem;flex-shrink:0;transition:transform 0.2s;';
+    chevron.textContent = '\u25b8';
+
+    expandZone.appendChild(nameEl);
+    expandZone.appendChild(chevron);
+
+    // ── Body panel ─────────────────────────────────────────────────────────
+    const body = document.createElement('div');
+    body.style.cssText = 'display:none;padding:0.75rem 1rem 1rem 1rem;background:var(--bg-surface);border-top:1px solid var(--border);';
+
+    let bodyRendered = false;
+    expandZone.addEventListener('click', () => {
+      const isOpen = body.style.display !== 'none';
+      body.style.display = isOpen ? 'none' : 'block';
+      chevron.style.transform = isOpen ? '' : 'rotate(90deg)';
+      if (!isOpen && !bodyRendered) {
+        bodyRendered = true;
+        let html = '';
+        if (opt.bodyHtml) {
+          html = opt.bodyHtml;
+        } else if (opt.section) {
+          html = renderSecondaryFeatureBody(opt.section, classColor);
+        }
+        body.innerHTML = html || '<span style="color:var(--text-muted);font-style:italic;font-size:0.88rem;">No description available.</span>';
+      }
+    });
+
+    header.appendChild(selectZone);
+    header.appendChild(expandZone);
+    wrapper.appendChild(header);
+    wrapper.appendChild(body);
+    list.appendChild(wrapper);
+  }
+}
+
+function _togglePrereqOption(sid, wrapperEl, checkEl) {
+  const state = _prereqModalState;
+  const opt = state.options.find(o => o.sid === sid);
+  if (!opt) return;
+  const idx = state.selected.findIndex(s => s.sid === sid);
+
+  if (!wrapperEl) wrapperEl = document.querySelector(`.prereq-row[data-sid="${sid}"]`);
+  if (!checkEl && wrapperEl) checkEl = wrapperEl.querySelector('.prereq-circle');
+
+  const applyDeselect = (el, cc) => {
+    el.classList.remove('prereq-row-selected');
+    if (cc) { cc.style.borderColor = 'var(--border)'; cc.style.background = 'transparent'; cc.innerHTML = ''; }
+  };
+  const applySelect = (el, cc) => {
+    el.classList.add('prereq-row-selected');
+    if (cc) {
+      cc.style.borderColor = 'var(--gold)';
+      cc.style.background = 'var(--gold)';
+      cc.innerHTML = '<span style="color:#1a1200;font-size:10px;font-weight:700;line-height:1;">✓</span>';
+    }
+  };
+
+  if (idx >= 0) {
+    state.selected.splice(idx, 1);
+    applyDeselect(wrapperEl, checkEl);
+  } else {
+    if (state.need === 1 && state.selected.length >= 1) {
+      const old = state.selected.shift();
+      const oldEl = document.querySelector(`.prereq-row[data-sid="${old.sid}"]`);
+      const oldCc = oldEl ? oldEl.querySelector('.prereq-circle') : null;
+      applyDeselect(oldEl, oldCc);
+    }
+    state.selected.push(opt);
+    applySelect(wrapperEl, checkEl);
+  }
+
+  const confirmBtn = document.getElementById('prereq-modal-confirm');
+  const filled = state.selected.length >= state.need;
+  confirmBtn.disabled = !filled;
+  if (filled) {
+    confirmBtn.textContent = `Add ${state.className} with ${state.selected.map(s => s.name).join(' & ')}`;
+  } else {
+    const remaining = state.need - state.selected.length;
+    confirmBtn.textContent = `Pick ${remaining} more…`;
+  }
+}
+
+function confirmPrereqModal() {
+  const { item, className, subtype, selected } = _prereqModalState;
+  if (!selected.length) return;
+
+  for (const opt of selected) {
+    // If we got it from DOM, use its data attributes; otherwise minimal entry
+    selectedSecondaryFeatures[opt.sid] = {
+      name: opt.name,
+      subtype,
+      groupSlug: null,
+      parentSectionId: null,
+      classSkills: opt.classSkills || [],
+      bonusSpells: opt.bonusSpells || '',
+      grantedPowers: _sfGrantedPowers[opt.sid] || [],
+    };
+  }
+
+  closePrereqModal();
+
+  // Re-trigger add: try detail-page button first, fall back to direct push
+  const btn = document.getElementById('detail-build-btn');
+  if (btn && (btn.textContent.includes('Add') || btn.textContent.includes('+'))) {
+    btn.click();
+  } else {
+    // Card-path fallback: directly push the class
+    const existingIdx = character.classes.findIndex(c => c.name === className);
+    if (existingIdx < 0) {
+      const sfList = Object.entries(selectedSecondaryFeatures).map(([id, info]) => ({ id: parseInt(id), ...info }));
+      const newEntry = { ...item, level: 1, archetypes: [], secondaryFeatures: sfList, oppositionSchools: [] };
+      character.classes.push(newEntry);
+      if (character.classes.length === 1) character.favoredClassIndex = 0;
+      showToast(`${className} added with ${selected.map(s => s.name).join(' & ')}`);
+      if (!character._wealthGranted) setTimeout(() => openStartingWealthModal(className), 500);
+      setTimeout(() => checkInitialClassChoices(newEntry), 300);
+      updateBadge();
+      renderCharacter();
+      filterData('classes');
+      refreshEquipmentProficiency();
+    }
+  }
+}
+
+function closePrereqModal() {
+  document.getElementById('prereq-modal-backdrop').classList.remove('open');
+  _prereqModalState = { item: null, className: '', options: [], need: 0, selected: [] };
+}
+
+function downloadCharacterJson(id) {
+  const list = _getSavedChars();
+  const slot = list.find(c => c.id === id);
+  if (!slot) return;
+  const exportData = { name: slot.name, savedAt: slot.savedAt, character: slot.character };
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slot.name.replace(/[^a-z0-9_\-]/gi, '_')}_character.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`"${slot.name}" downloaded`);
+}
+
+function triggerCharacterUpload() {
+  const input = document.getElementById('chars-json-upload');
+  if (input) { input.value = ''; input.click(); }
+}
+
+function handleCharacterJsonUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.character) { showToast('Invalid character JSON', 'warning'); return; }
+      const list = _getSavedChars();
+      const baseName = (data.name || file.name.replace(/_character\.json$/i, '').replace(/_/g, ' ')) || 'Imported Character';
+      const existingNames = new Set(list.map(s => s.name));
+      let finalName = baseName;
+      if (existingNames.has(baseName)) {
+        let n = 2;
+        while (existingNames.has(`${baseName} (${n})`)) n++;
+        finalName = `${baseName} (${n})`;
+      }
+      const id = _genId();
+      list.unshift({ id, name: finalName, savedAt: Date.now(), character: data.character });
+      _putSavedChars(list);
+      renderCharactersDrawer();
+      showToast(`"${finalName}" imported`);
+      const btn = document.getElementById('nav-save-btn');
+      if (btn) btn.classList.add('has-name');
+    } catch (err) {
+      showToast('Failed to parse JSON', 'warning');
+    }
+  };
+  reader.readAsText(file);
+}
+
 function renderCharactersDrawer() {
   const list   = _getSavedChars();
   const cont   = document.getElementById('chars-list');
@@ -16280,6 +17334,7 @@ function renderCharactersDrawer() {
         <div class="char-slot-actions">
           ${!isCurrent ? `<button class="char-slot-btn load" onclick="loadSavedCharacter('${slot.id}')">Load</button>` : ''}
           ${isCurrent  ? `<button class="char-slot-btn overwrite" onclick="overwriteSavedCharacter('${slot.id}')">Update</button>` : ''}
+          <button class="char-slot-btn dl" onclick="downloadCharacterJson('${slot.id}')" title="Download as JSON">⬇</button>
           <button class="char-slot-btn del" onclick="deleteSavedCharacter('${slot.id}')">✕</button>
         </div>
       </div>`;
