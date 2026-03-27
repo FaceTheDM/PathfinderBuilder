@@ -481,8 +481,50 @@
     padding: 0 2rem;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     height: 64px;
+  }
+
+  /* Action buttons group (gold, lock, cache, save) */
+  .nav-actions {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-shrink: 0;
+    margin-left: auto; /* Push to far right */
+  }
+
+  /* Hamburger button — hidden on desktop, shown on mobile */
+  .nav-hamburger {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 6px 8px;
+    cursor: pointer;
+    width: 36px;
+    height: 32px;
+    flex-shrink: 0;
+  }
+  .nav-hamburger span {
+    display: block;
+    width: 18px;
+    height: 2px;
+    background: var(--text-secondary);
+    border-radius: 2px;
+    transition: all 0.2s;
+  }
+  .nav-hamburger:hover span { background: var(--gold); }
+  /* Animate to X when open */
+  nav.menu-open .nav-hamburger span:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+  }
+  nav.menu-open .nav-hamburger span:nth-child(2) { opacity: 0; }
+  nav.menu-open .nav-hamburger span:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
   }
 
   .nav-brand {
@@ -492,6 +534,7 @@
     letter-spacing: 0.05em;
     cursor: pointer;
     text-decoration: none;
+    flex-shrink: 0;
   }
 
   .nav-brand span {
@@ -508,6 +551,7 @@
     display: flex;
     gap: 0;
     height: 100%;
+    flex: 1; /* Fill space between brand and actions */
   }
 
   .nav-tab {
@@ -2325,23 +2369,28 @@
   }
   .comp-choice-row.checked { border-color: var(--gold-dark); background: rgba(201,168,76,0.06); }
   .comp-choice-row.disabled { opacity: 0.42; }
-  .comp-choice-row-top { display: flex; align-items: stretch; }
-  .comp-choice-main {
-    flex: 1; display: flex; align-items: center; gap: 0.55rem;
-    padding: 0.42rem 0.7rem; cursor: pointer;
+  /* comp-choice-row-top is now the full clickable row header */
+  .comp-choice-row-top {
+    display: flex; align-items: center; gap: 0.55rem;
+    padding: 0.42rem 0.7rem;
   }
+  .comp-choice-row-top.expandable {
+    cursor: pointer;
+    user-select: none;
+  }
+  .comp-choice-row-top.expandable:hover { background: rgba(255,255,255,0.04); }
   .comp-choice-check { width: 16px; height: 16px; accent-color: var(--gold); flex-shrink: 0; cursor: pointer; }
   .comp-choice-name { font-size: 0.8rem; color: var(--text-primary); flex: 1; }
   .comp-choice-row.checked .comp-choice-name { color: var(--gold); font-weight: 600; }
-  .comp-choice-expand {
-    padding: 0 0.55rem; border-left: 1px solid var(--border); background: rgba(255,255,255,0.03);
-    cursor: pointer; display: flex; align-items: center; font-size: 0.6rem; color: var(--text-muted);
-    transition: background 0.1s; white-space: nowrap;
+  /* Expand arrow on the right side of the row */
+  .comp-choice-arr {
+    font-size: 0.65rem; color: var(--text-muted);
+    margin-left: auto; flex-shrink: 0;
+    transition: transform 0.15s;
   }
-  .comp-choice-expand:hover { background: rgba(255,255,255,0.08); color: var(--text-secondary); }
   .comp-choice-desc {
-    display: none; padding: 0.4rem 0.7rem 0.5rem 2rem;
-    font-size: 0.74rem; color: var(--text-muted); line-height: 1.5;
+    display: none; padding: 0.45rem 0.75rem 0.55rem 2.2rem;
+    font-size: 0.8rem; color: var(--text-secondary); line-height: 1.6;
     border-top: 1px solid rgba(255,255,255,0.06); background: rgba(0,0,0,0.18);
   }
   /* ── Footer ──────────────────────────────────────────────────────────── */
@@ -2373,87 +2422,164 @@
   }
   #confirm-dialog-btns { display: flex; justify-content: flex-end; gap: 0.55rem; }
 
+
   /* ══════════════════════════════════════════════════════════════════════════
      MOBILE RESPONSIVE STYLES
      ══════════════════════════════════════════════════════════════════════════ */
 
+  /* ── Full-screen mobile nav overlay (global — works at all viewport sizes) ── */
+  .mobile-nav-overlay {
+    display: none;          /* Hidden until toggled open */
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: var(--bg-deep, #0d0d0d);
+    flex-direction: column;
+    align-items: stretch;
+    overflow: hidden;
+  }
+  .mobile-nav-overlay.open { display: flex; }
+
+  .mobile-nav-overlay-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .mobile-nav-overlay-title {
+    font-family: 'Cinzel Decorative', serif;
+    font-size: 1rem;
+    color: var(--gold);
+    letter-spacing: 0.05em;
+  }
+  .mobile-nav-overlay-close {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-secondary);
+    font-size: 1.2rem;
+    width: 40px;
+    height: 40px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .mobile-nav-overlay-close:hover { color: var(--gold); border-color: var(--gold); }
+  .mobile-nav-overlay-items {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem 0;
+  }
+  .mobile-nav-overlay-item {
+    display: flex;
+    align-items: center;
+    padding: 1.2rem 2rem;
+    font-family: 'Cinzel', serif;
+    font-size: 1.05rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    transition: background 0.15s, color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  .mobile-nav-overlay-item:hover,
+  .mobile-nav-overlay-item:active { background: rgba(201,168,76,0.1); color: var(--gold); }
+  .mobile-nav-overlay-item.active { color: var(--gold); }
+  .mobile-nav-overlay-item .badge { margin-left: 0.5rem; font-size: 0.7rem; }
+  .mobile-nav-overlay-item.nav-locked { opacity: 0.4; pointer-events: none; }
+
+  /* ── Tablet & phone (≤768 px) ──────────────────────────────────────────── */
   @media (max-width: 768px) {
 
     /* ── Navigation ──────────────────────────────────────────────────────── */
     nav {
-      padding: 0 0.75rem;
       height: auto;
-      min-height: 56px;
-      flex-wrap: wrap;
-      row-gap: 0;
-      padding-top: 0.3rem;
-      padding-bottom: 0;
+      padding: 0.35rem 0.75rem;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 0;
     }
 
-    .nav-brand {
-      font-size: 0.85rem;
-      padding: 0.25rem 0;
+    /* Hide brand on mobile — hamburger takes its place */
+    .nav-brand { display: none; }
+
+    /* Show hamburger button at FAR LEFT */
+    .nav-hamburger {
+      display: flex;
+      order: 0;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      width: 40px;
+      height: 36px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      background: none;
+      margin-right: 0.5rem;
+    }
+    .nav-hamburger span {
+      /* Keep span styles */
     }
 
-    /* Buttons row — shrink and tighten */
-    nav > div {
-      gap: 0.25rem !important;
+    /* Hide desktop tab bar entirely on mobile — overlay used instead */
+    .nav-tabs { display: none !important; }
+
+    /* Action buttons: right side */
+    .nav-actions {
+      flex: 1 1 auto;
+      order: 1;
+      gap: 0.25rem;
+      margin-left: auto;
+      justify-content: flex-end;
     }
 
-    /* Nav tabs — scrollable horizontal strip below brand */
-    .nav-tabs {
-      order: 10;
-      width: 100%;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: none;
-      border-top: 1px solid var(--border);
-      margin-top: 0.25rem;
-    }
-    .nav-tabs::-webkit-scrollbar { display: none; }
-
-    .nav-tab {
-      padding: 0 0.85rem;
-      font-size: 0.68rem;
-      letter-spacing: 0.06em;
-      flex-shrink: 0;
-      height: 38px;
-      white-space: nowrap;
+    /* Mobile overlay item spacing (overrides global at mobile size) */
+    .mobile-nav-overlay-item {
+      padding: 1.1rem 1.75rem;
+      font-size: 1rem;
     }
 
-    /* Shrink nav action buttons */
+    /* Shrink/hide action buttons */
     #nav-gold-btn {
       font-size: 0.68rem;
       padding: 2px 7px;
-      height: 26px;
+      height: 28px;
+      margin-left: 0;
     }
-    #nav-gold-display { display: none; }  /* Show only coin icon on mobile */
+    #nav-gold-display { display: none; } /* Coin icon only on mobile */
 
     .nav-lock-btn {
       font-size: 0.7rem;
-      padding: 2px 5px;
-      height: 26px;
+      padding: 2px 6px;
+      height: 28px;
     }
 
-    /* Hide cache clear button on mobile to save space */
-    .cache-btn { display: none; }
+    .cache-btn { display: none; } /* Drop "Clear Cache" on mobile */
 
     .char-save-btn {
-      font-size: 0.68rem;
+      font-size: 0.65rem;
       padding: 0 0.55rem;
-      height: 26px;
+      height: 28px;
     }
 
-    /* ── Hero sections ───────────────────────────────────────────────────── */
+    /* ── Hero / page headers ─────────────────────────────────────────────── */
     .hero, .character-hero {
-      padding: 1.5rem 1rem 1rem;
+      padding: 1.25rem 1rem 0.75rem;
     }
     .hero h1, .character-hero h2 {
-      font-size: 1.65rem;
+      font-size: 1.6rem;
     }
     .hero-sub {
       font-size: 0.75rem;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.08em;
     }
 
     /* ── Filter / search bars ────────────────────────────────────────────── */
@@ -2467,7 +2593,7 @@
       flex-basis: 100%;
     }
 
-    /* ── Main card grid ──────────────────────────────────────────────────── */
+    /* ── Main card grid (classes, races, feats, etc.) ────────────────────── */
     .grid {
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
       gap: 1rem;
@@ -2476,35 +2602,40 @@
 
     /* ── Spell grid ──────────────────────────────────────────────────────── */
     .sp-spell-grid {
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      padding: 0.5rem 0.6rem 0.65rem;
+      grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+      padding: 0.4rem 0.6rem 0.6rem;
     }
 
     /* ── Character stats panel ───────────────────────────────────────────── */
     .char-stats-panel {
-      padding: 0 1rem;
+      padding: 0 0.85rem;
     }
-    .char-stats-grid {          /* 6-col ability scores → 3 col */
+    /* 6-col ability scores → 3 col */
+    .char-stats-grid {
       grid-template-columns: repeat(3, 1fr);
       gap: 0.5rem;
     }
-    .char-stats-row {           /* 7-col row → 4 col */
+    /* 7-col row → 4 col */
+    .char-stats-row {
       grid-template-columns: repeat(4, 1fr);
       gap: 0.5rem;
     }
-    .char-stats-row-saves {     /* 3-col saves — keep 3 */
+    /* 3-col saves — keep but tighten */
+    .char-stats-row-saves {
       gap: 0.5rem;
     }
-    .char-stats-row-ac {        /* 5-col AC → 3 col */
+    /* 5-col AC → 3 col */
+    .char-stats-row-ac {
       grid-template-columns: repeat(3, 1fr);
       gap: 0.5rem;
     }
-    .char-stats-row-combat {    /* 4-col combat → 2 col */
+    /* 4-col combat → 2 col */
+    .char-stats-row-combat {
       grid-template-columns: repeat(2, 1fr);
       gap: 0.5rem;
     }
 
-    /* ── Class progression table — allow horizontal scroll ──────────────── */
+    /* Class progression table — horizontal scroll instead of overflow */
     .char-class-table-outer {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
@@ -2514,21 +2645,22 @@
     .char-level-bar {
       padding: 0.5rem 0.75rem;
       gap: 0.35rem;
-      margin-bottom: 1rem;
+      margin-bottom: 0.85rem;
     }
 
     /* ── Detail / modal panels ───────────────────────────────────────────── */
+    /* Slide up from bottom like a sheet on mobile */
     .detail-panel {
       width: 100vw;
-      max-height: 94vh;
-      border-radius: 12px 12px 0 0;
+      max-height: 92vh;
+      border-radius: 14px 14px 0 0;
       top: auto;
-      left: 0;
+      left: 0 !important;
       bottom: 0;
-      transform: translateY(4%) scale(0.98);
+      transform: translateY(6%) scale(0.98) !important;
     }
     .detail-wrap.active .detail-panel {
-      transform: translateY(0) scale(1);
+      transform: translateY(0) scale(1) !important;
     }
     .detail-panel-topbar {
       padding: 0.75rem 1rem;
@@ -2541,13 +2673,15 @@
     }
     .detail-header {
       padding: 0.75rem 1rem;
+      gap: 0.65rem;
     }
+    .detail-icon { font-size: 1.6rem; }
 
     /* ── Companion modal — stack list above detail ───────────────────────── */
     #companion-modal {
       width: 100vw;
       height: 100vh;
-      max-height: none;
+      max-height: 100vh;
       border-radius: 0;
     }
     #companion-modal-body {
@@ -2558,82 +2692,88 @@
       min-width: unset;
       border-right: none;
       border-bottom: 1px solid var(--border);
-      max-height: 180px;
+      max-height: 175px;
       flex-shrink: 0;
     }
 
     /* ── Currency popover ────────────────────────────────────────────────── */
     #currency-popover {
-      min-width: 200px;
+      min-width: 195px;
       right: 0;
       left: auto;
     }
 
     /* ── Characters drawer ───────────────────────────────────────────────── */
     .chars-drawer {
-      width: 100%;
-      max-width: 100vw;
+      width: min(100vw, 400px);
     }
 
-    /* ── Pending choices FAB — move up a bit on mobile ───────────────────── */
+    /* ── Pending choices FAB ─────────────────────────────────────────────── */
     #pending-choices-fab {
       bottom: 4rem;
       right: 1rem;
     }
+
+    /* ── "Add Spells / Choose Spells" FAB buttons on the character page ─────── */
+    .spell-add-fab {
+      padding: 0.42rem 0.75rem !important;
+      font-size: 0.72rem !important;
+      border-radius: 7px !important;
+      white-space: normal !important;
+      text-align: center;
+    }
+    .spell-add-fab span:first-child {
+      font-size: 0.9rem !important; /* Shrink icon too */
+    }
   }
 
+  /* ── Small phones (≤480 px) ─────────────────────────────────────────────── */
   @media (max-width: 480px) {
-    /* Very small phones */
 
     nav {
-      padding: 0 0.5rem;
+      padding: 0.3rem 0.5rem 0;
     }
 
     /* Hide brand subtitle on tiny screens */
     .nav-brand span { display: none; }
 
     .hero h1, .character-hero h2 {
-      font-size: 1.3rem;
+      font-size: 1.25rem;
     }
 
-    /* Single-column card grid on tiny screens */
+    /* One card per row */
     .grid {
       grid-template-columns: 1fr;
       padding: 0 0.75rem 2rem;
     }
 
-    /* Tighter stat grids */
+    /* Tighter ability score grid */
     .char-stats-grid {
       grid-template-columns: repeat(3, 1fr);
-      gap: 0.35rem;
+      gap: 0.3rem;
     }
     .char-stats-row {
       grid-template-columns: repeat(3, 1fr);
-      gap: 0.35rem;
+      gap: 0.3rem;
     }
     .char-stats-row-ac {
       grid-template-columns: repeat(3, 1fr);
-      gap: 0.35rem;
+      gap: 0.3rem;
     }
     .char-stats-row-combat {
       grid-template-columns: repeat(2, 1fr);
-      gap: 0.35rem;
+      gap: 0.3rem;
     }
 
-    /* Class card padding */
-    .class-card {
-      padding: 1rem;
-    }
+    .class-card { padding: 1rem; }
 
-    /* Filter bar full-width inputs */
-    .filter-bar {
-      padding: 0 0.75rem;
-    }
+    .filter-bar { padding: 0 0.5rem; }
 
-    /* Spell popup wider on tiny screens */
+    /* Spell popup: single column */
     #spell-popup-content {
       grid-template-columns: 1fr !important;
     }
+  }
   }
 </style>
 </head>
@@ -2646,20 +2786,24 @@
     Pathfinder Builder
     <span>Dynamic PSRD Database</span>
   </div>
-  <div style="display: flex; align-items: center; gap: 0;">
-    <div class="nav-tabs">
-      <div class="nav-tab active" data-page="races" onclick="switchPage('races')">Races</div>
-      <div class="nav-tab" data-page="classes" onclick="switchPage('classes')">Classes</div>
-      <div class="nav-tab" data-page="feats" onclick="switchPage('feats')">Feats</div>
-      <div class="nav-tab" data-page="traits" onclick="switchPage('traits')">Traits</div>
-      <div class="nav-tab" data-page="equipment" onclick="switchPage('equipment')">Equipment</div>
-      <div class="nav-tab" data-page="spells" onclick="switchPage('spells')">Spells</div>
-      <div class="nav-tab" data-page="deities" onclick="switchPage('deities')">Deities</div>
-      <div class="nav-tab" data-page="character" onclick="switchPage('character')">
-        Character
-        <span class="badge" id="badge">0</span>
-      </div>
+  <!-- Mobile-only hamburger toggle -->
+  <button class="nav-hamburger" onclick="toggleNavMenu()" aria-label="Menu">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="nav-tabs">
+    <div class="nav-tab active" data-page="races" onclick="switchPage('races')">Races</div>
+    <div class="nav-tab" data-page="classes" onclick="switchPage('classes')">Classes</div>
+    <div class="nav-tab" data-page="feats" onclick="switchPage('feats')">Feats</div>
+    <div class="nav-tab" data-page="traits" onclick="switchPage('traits')">Traits</div>
+    <div class="nav-tab" data-page="equipment" onclick="switchPage('equipment')">Equipment</div>
+    <div class="nav-tab" data-page="spells" onclick="switchPage('spells')">Spells</div>
+    <div class="nav-tab" data-page="deities" onclick="switchPage('deities')">Deities</div>
+    <div class="nav-tab" data-page="character" onclick="switchPage('character')">
+      Character
+      <span class="badge" id="badge">0</span>
     </div>
+  </div>
+  <div class="nav-actions">
     <button id="nav-gold-btn" onclick="toggleCurrencyPopover()" title="View & edit currency">
       <span style="font-size:1rem;">🪙</span>
       <span id="nav-gold-display">0 gp</span>
@@ -2672,6 +2816,27 @@
     </button>
   </div>
 </nav>
+
+<!-- MOBILE FULL-SCREEN NAV OVERLAY -->
+<div class="mobile-nav-overlay" id="mobile-nav-overlay">
+  <div class="mobile-nav-overlay-header">
+    <div class="mobile-nav-overlay-title">Navigation</div>
+    <button class="mobile-nav-overlay-close" onclick="toggleNavMenu()" aria-label="Close menu">✕</button>
+  </div>
+  <div class="mobile-nav-overlay-items">
+    <div class="mobile-nav-overlay-item" data-page="races" onclick="switchPage('races')">Races</div>
+    <div class="mobile-nav-overlay-item" data-page="classes" onclick="switchPage('classes')">Classes</div>
+    <div class="mobile-nav-overlay-item" data-page="feats" onclick="switchPage('feats')">Feats</div>
+    <div class="mobile-nav-overlay-item" data-page="traits" onclick="switchPage('traits')">Traits</div>
+    <div class="mobile-nav-overlay-item" data-page="equipment" onclick="switchPage('equipment')">Equipment</div>
+    <div class="mobile-nav-overlay-item" data-page="spells" onclick="switchPage('spells')">Spells</div>
+    <div class="mobile-nav-overlay-item" data-page="deities" onclick="switchPage('deities')">Deities</div>
+    <div class="mobile-nav-overlay-item" data-page="character" onclick="switchPage('character')">
+      Character
+      <span class="badge" id="badge-overlay">0</span>
+    </div>
+  </div>
+</div>
 
 <!-- CURRENCY POPOVER -->
 <div id="currency-popover">
@@ -2792,7 +2957,6 @@
     <div class="filter-count" id="filter-count-classes">Loading...</div>
   </div>
   <div style="max-width:1400px;margin:-1.5rem auto 1.5rem;padding:0 2rem;display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;">
-    <div style="font-family:'Crimson Pro',serif;font-size:0.9rem;color:var(--text-muted);font-style:italic;">* The Advanced Class Guide has not been added yet (Hunter, Warpriest, Skald, Arcanist, Bloodrager, Brawler, Investigator, Shaman, Slayer, Swashbuckler)</div>
     <div style="display:flex;gap:1rem;flex-wrap:wrap;flex-shrink:0;">
       <span style="font-family:Cinzel,serif;font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:0.4rem;"><span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#c44a2a;"></span>Martial</span>
       <span style="font-family:Cinzel,serif;font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:0.4rem;"><span style="display:inline-block;width:12px;height:12px;border-radius:2px;background:#4a4a9a;"></span>Arcane</span>
@@ -4410,12 +4574,14 @@ async function loadFullDetail(item) {
     }
 
     // Strategy 2: index lookup — finds sibling tables with the same class name (ACG style)
-    // These are registered separately in central_index with type='table' and matching name
+    // These are registered separately in central_index with type='table' and matching name.
+    // We also match "ClassName %" to pick up companion tables like "Hunter Spells Known",
+    // "Bloodrager Spells Known", "Skald Spells Known", "Arcanist Spells Prepared", etc.
     if (classTables.length === 0 && indexDb) {
       const className = item.name || item._name || '';
       const idxRows = idxQuery(
-        `SELECT section_id FROM central_index WHERE database=? AND type='table' AND name=? ORDER BY section_id`,
-        [dbFile, className]);
+        `SELECT section_id FROM central_index WHERE database=? AND type='table' AND (name=? OR name LIKE ?) ORDER BY section_id`,
+        [dbFile, className, className + ' %']);
       if (idxRows.length) {
         const sids = idxRows.map(r => r.section_id);
         for (const tsid of sids) {
@@ -4635,6 +4801,42 @@ function parseMysterySpellsHtml(bonusSpells, clsLevel, clsColor) {
 // Parses the progression table to find which features appear at which level,
 // then renders collapsible rows for all features gained up to clsLevel.
 // Archetype replacements are applied so replaced features show the replacement name.
+// ─── Secondary feature body hydrator ─────────────────────────────────────────
+// Re-renders sf.body from the class section tree when it's missing (post-save-load).
+// Also re-extracts grantedPowers if they have empty bodies.
+function _sfBodyFromClass(sf, clsObj, classColor) {
+  function _findSec(id, sections) {
+    for (const s of (sections || [])) {
+      if (!s) continue;
+      if (s.section_id === id) return s;
+      const found = _findSec(id, s.sections);
+      if (found) return found;
+    }
+    return null;
+  }
+  const sec = _findSec(sf.id, (clsObj && clsObj.sections) || []);
+  if (!sec) return sf.body || '';
+
+  // Re-render body if empty (stripped on save)
+  if (!sf.body || !sf.body.trim()) {
+    sf.body = renderSecondaryFeatureBody(sec, classColor);
+  }
+  // Re-extract granted powers with full bodies if they have missing bodies
+  if (!sf.grantedPowers || !sf.grantedPowers.length || sf.grantedPowers.every(p => !p.body)) {
+    sf.grantedPowers = extractGrantedPowers(sec);
+  }
+  // Re-extract class skills and notes if missing (safety net for old saves)
+  if (!sf.classSkills || !sf.classSkills.length) {
+    const annot = extractSFAnnotations(sec);
+    sf.classSkills = annot.classSkills;
+    if (!sf.skillNotes && annot.skillNotes) sf.skillNotes = annot.skillNotes;
+  } else if (!sf.skillNotes) {
+    const annot = extractSFAnnotations(sec);
+    if (annot.skillNotes) sf.skillNotes = annot.skillNotes;
+  }
+  return sf.body || '';
+}
+
 function buildClassFeaturesHtml(full, clsLevel, archetypes, clsColor, secondaryFeatures, levelChoices, clsName) {
   const plain = s => (s || '').replace(/<[^>]+>/g, '').trim();
 
@@ -4783,7 +4985,9 @@ function buildClassFeaturesHtml(full, clsLevel, archetypes, clsColor, secondaryF
       // ── One row per top-level selection (mystery, school, bloodline) + its nested sub-rows ──
       for (const sf of topSFs) {
         const typeLabel = SECONDARY_SUBTYPE_LABELS[sf.subtype] || sf.subtype.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase());
-        const hasBody   = !!(sf.body && sf.body.trim());
+        // Hydrate body from class section tree if missing (stripped on save)
+        const sfBodyRendered = _sfBodyFromClass(sf, full, clsColor);
+        const hasBody   = !!(sfBodyRendered && sfBodyRendered.trim());
 
         // Main selection row — collapsed by default
         sfAdditionsHtml += `
@@ -4795,8 +4999,8 @@ function buildClassFeaturesHtml(full, clsLevel, archetypes, clsColor, secondaryF
             </div>
             <div class="char-cf-row-body">
               ${hasBody
-                ? sf.body
-                : `<span style="color:var(--text-muted);font-style:italic;">Open the class detail to load the full description.</span>`}
+                ? sfBodyRendered
+                : `<span style="color:var(--text-muted);font-style:italic;">No description available.</span>`}
             </div>
           </div>`;
 
@@ -5976,11 +6180,16 @@ const SPELLS_KNOWN_TABLE = {
 };
 // Oracle uses the same spells-known table as Sorcerer
 SPELLS_KNOWN_TABLE.oracle = SPELLS_KNOWN_TABLE.sorcerer;
+// Hunter: 6-level WIS spontaneous divine caster (ACG). Same spells-known progression as Inquisitor.
+SPELLS_KNOWN_TABLE.hunter = SPELLS_KNOWN_TABLE.inquisitor;
+// Skald: 6-level CHA spontaneous arcane caster (ACG). Same spells-known progression as Bard.
+SPELLS_KNOWN_TABLE.skald = SPELLS_KNOWN_TABLE.bard;
 
 // Key ability score per spontaneous class
 const SPONTANEOUS_ABILITY = {
   sorcerer:'cha', bard:'cha', oracle:'cha', summoner:'cha',
   inquisitor:'wis', bloodrager:'cha',
+  hunter:'wis', skald:'cha',
 };
 
 // All classes that use the spells-known quota system
@@ -6867,6 +7076,8 @@ function toggleSecondaryFeature(sectionId, featureName, subtype, pickCount, grou
     const _checkEl   = document.getElementById('sf-check-' + sectionId);
     const _skillsRaw = _checkEl ? (_checkEl.getAttribute('data-sf-skills') || '') : '';
     const _spellsRaw = _checkEl ? (_checkEl.getAttribute('data-sf-spells') || '') : '';
+    const _sfAnnot2  = document.getElementById('sf-check-' + sectionId);
+    const _noteAttr  = _sfAnnot2 ? (_sfAnnot2.getAttribute('data-sf-notes') || '') : '';
     selectedSecondaryFeatures[sectionId] = {
       name: featureName,
       subtype,
@@ -6875,6 +7086,7 @@ function toggleSecondaryFeature(sectionId, featureName, subtype, pickCount, grou
       body:          _bodyDiv ? _bodyDiv.innerHTML : '',
       classSkills:   _skillsRaw ? _skillsRaw.split('||') : [],
       bonusSpells:   _spellsRaw,
+      skillNotes:    _noteAttr,
       grantedPowers: _sfGrantedPowers[sectionId] || [],
     };
   } else {
@@ -7069,8 +7281,9 @@ function renderSpellGrid(bodyHtml, gridLabel) {
 // Render a single ability as a char-cf-row style collapsible banner —
 // matches the look of class feature rows in the class features panel.
 function renderAbilityAsFeatureRow(ab, classColor) {
-  const plain = s => (s || '').replace(/<[^>]+>/g, '').trim();
-  const abText = plain(ab.body);
+  // Use raw HTML body to preserve <b>/<strong> tags from the DB (e.g. "+6 at 8th level").
+  // boldKeyTerms() is HTML-aware (skips tag content) so it's safe to call on raw HTML.
+  const abText = (ab.body || '').trim();
   const abId = 'sfab-' + (ab.section_id || Math.random().toString(36).slice(2, 8));
   // data-sfr-slug lets refreshSFMutualExclusion find and hide/show this row by power name
   const slug = (ab.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
@@ -7187,6 +7400,7 @@ function extractSFAnnotations(item) {
   const plain = s => (s || '').replace(/<[^>]+>/g, '').trim();
   const classSkills = [];
   let bonusSpells   = '';
+  let skillNotes    = ''; // extra notes beyond the class skill list (e.g. untrained, scaling bonuses)
 
   for (const sec of (item.sections || [])) {
     if (!sec) continue;
@@ -7194,8 +7408,9 @@ function extractSFAnnotations(item) {
 
     // ── Class Skills ──────────────────────────────────────────────────────────
     if (/^(?:class\s+)?skills?$/i.test(sName)) {
-      let text = plain(sec.body);
-      if (!text) continue;
+      const fullText = plain(sec.body);
+      if (!fullText) continue;
+      let text = fullText;
       const colonIdx = text.indexOf(':');
       if (colonIdx >= 0 && colonIdx < text.length - 2) {
         // Colon format: "Class Skills: Acrobatics, Bluff, ..." — strip the preamble
@@ -7216,6 +7431,16 @@ function extractSFAnnotations(item) {
           .trim();
         if (skill.length > 2) classSkills.push(skill);
       });
+      // Capture any additional text beyond the skills-list sentence as special notes
+      // (e.g. "can make Knowledge (nobility) checks untrained; 1/2 level bonus…")
+      const skillListEnd = fullText.match(/\blist of class skills\.?\s*/i);
+      if (skillListEnd) {
+        const remaining = fullText.slice(fullText.indexOf(skillListEnd[0]) + skillListEnd[0].length).trim();
+        if (remaining.length > 10) skillNotes = remaining;
+      } else if (fullText.length > text.length + 5) {
+        // Fallback: store full text as notes if it's substantially longer than just the list
+        skillNotes = fullText;
+      }
     }
 
     // ── Bonus Spells / Domain Spells ──────────────────────────────────────────
@@ -7225,7 +7450,7 @@ function extractSFAnnotations(item) {
     }
   }
 
-  return { classSkills, bonusSpells };
+  return { classSkills, bonusSpells, skillNotes };
 }
 
 // Extract level-gated powers from a secondary feature (bloodline, domain, school, mystery, spirit, etc.)
@@ -7246,10 +7471,19 @@ function extractGrantedPowers(item) {
 
   // Heading names that indicate a "powers" sub-section
   const POWERS_RE = /\b(bloodline\s+)?powers?\b|spirit\s+abilit|school\s+powers?|domain\s+powers?|mystery\s+powers?|order\s+abilit|arcana|bonus\s+feat/i;
+  // Order informational sections shown as level-1 info entries
+  const ORDER_INFO_RE = /^(?:edicts|challenge|skills)$/i;
 
   for (const sec of (item.sections || [])) {
     if (!sec) continue;
     const sName = (sec.name || '').toLowerCase();
+
+    // Capture Edict / Challenge / Skills for warrior_orders as level-1 informational powers
+    if (ORDER_INFO_RE.test(sName) && item.subtype === 'warrior_order') {
+      powers.push({ name: sec.name, body: sec.body || '', reqLevel: 1 });
+      continue;
+    }
+
     if (!POWERS_RE.test(sName)) continue;
     // Skip pure "bonus spells" sections — those are handled separately
     if (/bonus\s+spells?/i.test(sName)) continue;
@@ -7351,10 +7585,11 @@ function renderSecondaryFeatureList(feat, classColor, pickCount) {
     // Body = full feature text
     const bodyHtml = renderSecondaryFeatureBody(item, classColor);
 
-    // Extract class-skill additions and bonus-spell text for character-page display
+    // Extract class-skill additions, bonus-spell text, and skill notes for character-page display
     const _sfAnnot = extractSFAnnotations(item);
     const _skillsAttr  = _sfAnnot.classSkills.length  ? _sfAnnot.classSkills.join('||')       : '';
     const _spellsAttr  = _sfAnnot.bonusSpells         ? _sfAnnot.bonusSpells.replace(/"/g,"'") : '';
+    const _notesAttr   = _sfAnnot.skillNotes          ? _sfAnnot.skillNotes.replace(/"/g,"'")  : '';
 
     // Extract level-gated granted powers (bloodline powers, domain powers, etc.)
     _sfGrantedPowers[sid] = extractGrantedPowers(item);
@@ -7393,7 +7628,7 @@ function renderSecondaryFeatureList(feat, classColor, pickCount) {
           <span style="position:relative;width:16px;height:16px;flex-shrink:0;display:inline-block;">
             <input type="checkbox" id="${checkId}" ${isChecked ? 'checked' : ''}
               onchange="toggleSecondaryFeature(${sid},'${safeName}','${subtype}',${pickCount},'${groupSlug}')"
-              data-sf-skills="${_skillsAttr}" data-sf-spells="${_spellsAttr}"
+              data-sf-skills="${_skillsAttr}" data-sf-spells="${_spellsAttr}" data-sf-notes="${_notesAttr}"
               style="position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;z-index:1;">
             <span id="${checkId}-vis" style="position:absolute;inset:0;border:1px solid ${isChecked ? 'var(--gold)' : 'var(--gold-dark)'};border-radius:3px;background:${isChecked ? 'rgba(201,168,76,0.15)' : 'var(--bg-surface)'};display:flex;align-items:center;justify-content:center;pointer-events:none;transition:background 0.15s,border-color 0.15s;">${isChecked ? `<span style="color:var(--gold);font-size:11px;line-height:1;">✓</span>` : ''}</span>
           </span>
@@ -10326,12 +10561,13 @@ function _compAccordionToggle(bodyId) {
   if (hdr) hdr.classList.toggle('open', isOpen);
 }
 
-function _compChoiceDescToggle(btn) {
-  const desc = btn.parentElement.nextElementSibling;
-  if (!desc) return;
+function _compChoiceRowToggle(rowTop) {
+  const desc = rowTop.nextElementSibling;
+  if (!desc || !desc.classList.contains('comp-choice-desc')) return;
   const isOpen = desc.style.display === 'block';
   desc.style.display = isOpen ? 'none' : 'block';
-  btn.textContent = isOpen ? '▾ Info' : '▴ Info';
+  const arr = rowTop.querySelector('.comp-choice-arr');
+  if (arr) arr.textContent = isOpen ? '▾' : '▴';
 }
 
 function _compModalRenderChoices() {
@@ -10369,13 +10605,11 @@ function _compModalRenderChoices() {
       const desc     = COMPANION_TRICK_DESCS[t] || '';
       const safeT    = t.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
       html += `<div class="comp-choice-row${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}">
-        <div class="comp-choice-row-top">
-          <div class="comp-choice-main" onclick="_compModalToggleTrick('${safeT}',${!checked})">
-            <input type="checkbox" class="comp-choice-check" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}
-              onclick="event.stopPropagation();_compModalToggleTrick('${safeT}',this.checked)">
-            <span class="comp-choice-name">${t}</span>
-          </div>
-          ${desc ? `<div class="comp-choice-expand" onclick="_compChoiceDescToggle(this)">▾ Info</div>` : ''}
+        <div class="comp-choice-row-top${desc ? ' expandable' : ''}" ${desc ? 'onclick="_compChoiceRowToggle(this)"' : ''}>
+          <input type="checkbox" class="comp-choice-check" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+            onclick="event.stopPropagation();_compModalToggleTrick('${safeT}',this.checked)">
+          <span class="comp-choice-name">${t}</span>
+          ${desc ? '<span class="comp-choice-arr">▾</span>' : ''}
         </div>
         ${desc ? `<div class="comp-choice-desc">${desc}</div>` : ''}
       </div>`;
@@ -10404,13 +10638,11 @@ function _compModalRenderChoices() {
       const desc     = COMPANION_FEAT_DESCS[f] || '';
       const safeF    = f.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
       html += `<div class="comp-choice-row${checked ? ' checked' : ''}${disabled ? ' disabled' : ''}">
-        <div class="comp-choice-row-top">
-          <div class="comp-choice-main" onclick="_compModalToggleFeat('${safeF}',${!checked})">
-            <input type="checkbox" class="comp-choice-check" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}
-              onclick="event.stopPropagation();_compModalToggleFeat('${safeF}',this.checked)">
-            <span class="comp-choice-name">${f}</span>
-          </div>
-          ${desc ? `<div class="comp-choice-expand" onclick="_compChoiceDescToggle(this)">▾ Info</div>` : ''}
+        <div class="comp-choice-row-top${desc ? ' expandable' : ''}" ${desc ? 'onclick="_compChoiceRowToggle(this)"' : ''}>
+          <input type="checkbox" class="comp-choice-check" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}
+            onclick="event.stopPropagation();_compModalToggleFeat('${safeF}',this.checked)">
+          <span class="comp-choice-name">${f}</span>
+          ${desc ? '<span class="comp-choice-arr">▾</span>' : ''}
         </div>
         ${desc ? `<div class="comp-choice-desc">${desc}</div>` : ''}
       </div>`;
@@ -11343,26 +11575,28 @@ function processClassTable(html, hideSpells = false) {
       continue;
     }
 
-    // Hide spell columns in data rows
-    let rebuiltCells = cells;
+    // Collect all cell modifications keyed by original index in `cells`,
+    // then apply them in reverse order so earlier positions stay valid.
+    // This avoids the content-matching bug where <td>5</td> in the Special
+    // column would accidentally get hidden instead of a spell-slot column
+    // that also contains the value 5.
+    const cellMods = []; // { index, length, newHtml }
+
+    // Spell hiding modifications
     if (hideSpells && (spellColIndices.length > 0 || knownColIndices.length > 0)) {
       tds.forEach((td, idx) => {
         if (spellColIndices.includes(idx) || knownColIndices.includes(idx)) {
           const hiddenTd = td[1].replace('<td', '<td style="display:none;"') + td[2] + td[3];
-          rebuiltCells = rebuiltCells.replace(td[0], hiddenTd);
+          cellMods.push({ index: td.index, length: td[0].length, newHtml: hiddenTd });
         }
       });
     }
 
+    // Special column modification (left-align + linkify feature names)
     const target   = tds[specialColIndex];
     const content  = target[2];
     const closeTag = target[3];
-
-    // Left-align + wrap Special column (overrides any CSS text-align:center)
     const newOpen = '<td style="text-align:left;vertical-align:top;white-space:normal;">';
-
-    // Linkify: split on comma, wrap each feature name in a scroll anchor
-    // Also add data-feature slug so refreshClassTableReplacements() can target tokens
     const linked = content.split(',').map(raw => {
       const trimmed = raw.trim();
       if (!trimmed || trimmed === '—' || trimmed === '&mdash;') return raw;
@@ -11377,10 +11611,14 @@ function processClassTable(html, hideSpells = false) {
         `title="Jump to ${baseName}">${trimmed}</a>`
       );
     }).join(',');
+    cellMods.push({ index: target.index, length: target[0].length, newHtml: newOpen + linked + closeTag });
 
-    const newTd = newOpen + linked + closeTag;
-    // Splice by position to avoid collisions when feature names repeat
-    const finalCells = rebuiltCells.slice(0, target.index) + newTd + rebuiltCells.slice(target.index + target[0].length);
+    // Apply all mods in descending index order so earlier positions aren't shifted
+    cellMods.sort((a, b) => b.index - a.index);
+    let finalCells = cells;
+    for (const mod of cellMods) {
+      finalCells = finalCells.slice(0, mod.index) + mod.newHtml + finalCells.slice(mod.index + mod.length);
+    }
     result += `<tr class="${cls}">${finalCells}</tr>`;
   }
   result += html.slice(lastIndex);
@@ -13778,10 +14016,14 @@ function openDetailSync(category, item) {
   }
 
   if (category === 'classes') {
-    // Pre-populate selectedArchetypes + selectedSecondaryFeatures from existing character data
+    // Always clear global selections when opening any class detail panel
+    // (prevents contamination when switching between classes)
+    selectedArchetypes = {};
+    selectedSecondaryFeatures = {};
+    selectedOppositionSchools = {};
+    // Pre-populate from existing character data if class is already added
     const existingCls = character.classes.find(c => c.name === name);
     if (isAdded && existingCls) {
-      selectedArchetypes = {};
       if (existingCls.archetypes) {
         for (const a of existingCls.archetypes) {
           selectedArchetypes[a.path] = { name: a.name, source: a.source, classSkillMods: a.classSkillMods || null };
@@ -13791,8 +14033,6 @@ function openDetailSync(category, item) {
           }
         }
       }
-      selectedSecondaryFeatures = {};
-      selectedOppositionSchools = {};
       if (existingCls.secondaryFeatures) {
         for (const sf of existingCls.secondaryFeatures) {
           selectedSecondaryFeatures[sf.id] = {
@@ -13802,6 +14042,7 @@ function openDetailSync(category, item) {
             parentSectionId: sf.parentSectionId || null,
             classSkills: sf.classSkills || [],
             bonusSpells: sf.bonusSpells || '',
+            skillNotes:  sf.skillNotes  || '',
             grantedPowers: sf.grantedPowers || [],
           };
         }
@@ -15592,6 +15833,7 @@ function updatePendingChoicesNotification() {
     'wizard','magus','arcanist','witch',
     'alchemist','investigator',
     'sorcerer','bard','oracle','summoner','inquisitor','bloodrager',
+    'hunter','skald',
   ];
   const spellDeficits = [];
   for (const clsKey of ALL_TRACKED_CASTERS) {
@@ -15672,6 +15914,7 @@ function updatePendingChoicesNotification() {
     wizard:'📖', magus:'✨', arcanist:'📖', witch:'📖',
     alchemist:'⚗️', investigator:'🔍',
     sorcerer:'🔥', bard:'🎵', oracle:'🔮', summoner:'🌀', inquisitor:'⚖️', bloodrager:'💢',
+    hunter:'🏹', skald:'🎶',
   };
   const SPELL_BTN_COLORS = {
     wizard:      ['#4a7acc','#2a4a8a','rgba(74,122,204,0.3)'],
@@ -15686,19 +15929,22 @@ function updatePendingChoicesNotification() {
     summoner:    ['#4acc8a','#2a8a5a','rgba(74,204,138,0.3)'],
     inquisitor:  ['#cc8a4a','#8a5a2a','rgba(204,138,74,0.3)'],
     bloodrager:  ['#cc4a6a','#8a2a4a','rgba(204,74,106,0.3)'],
+    hunter:      ['#5a9a5a','#2a6a2a','rgba(90,154,90,0.3)'],
+    skald:       ['#cc7a4a','#8a4a2a','rgba(204,122,74,0.3)'],
   };
   const SPELL_BTN_LABELS = {
     wizard:'Spellbook', magus:'Spellbook', arcanist:'Spellbook', witch:'Patron Book',
     alchemist:'Formula Book', investigator:'Formula Book',
     sorcerer:'Sorcerer Spells', bard:'Bard Spells', oracle:'Oracle Spells',
     summoner:'Summoner Spells', inquisitor:'Inquisitor Spells', bloodrager:'Bloodrager Spells',
+    hunter:'Hunter Spells', skald:'Skald Spells',
   };
   for (const { clsKey, deficit } of spellDeficits) {
     const displayName = clsKey.charAt(0).toUpperCase() + clsKey.slice(1);
     const icon = SPELL_BTN_ICONS[clsKey] || '✨';
     const [c1, c2, shadow] = SPELL_BTN_COLORS[clsKey] || ['#4a7acc','#2a4a8a','rgba(74,122,204,0.3)'];
     const label = SPELL_BTN_LABELS[clsKey] || (displayName + ' Spells');
-    buttonsHtml += `<button onclick="switchPage('spells');setTimeout(()=>openSpellPopup('${displayName}'),200)"
+    buttonsHtml += `<button class="spell-add-fab" onclick="switchPage('spells');setTimeout(()=>openSpellPopup('${displayName}'),200)"
       style="background:linear-gradient(135deg,${c1} 0%,${c2} 100%);color:#fff;border:none;border-radius:10px;
              padding:0.7rem 1.2rem;font-family:Cinzel,serif;font-size:0.82rem;cursor:pointer;
              box-shadow:0 4px 18px rgba(0,0,0,0.55),0 1px 3px ${shadow};
@@ -16523,6 +16769,7 @@ function getSkillBonuses() {
 function getCharacterClassSkills() {
   const skills  = new Set();
   const sources = new Map(); // skillName → source label (only set for non-base additions)
+  const specialNotes = new Map(); // skillName → [{source, note}]
   let hasArchReplacement = false;
   const archReplacementSkills = new Set();
 
@@ -16538,6 +16785,12 @@ function getCharacterClassSkills() {
     const name = _normalize(rawName);
     skills.add(name);
     if (src && !sources.has(name)) sources.set(name, src);
+  };
+  // Add a special note for a skill
+  const _addNote = (rawName, source, note) => {
+    const name = _normalize(rawName);
+    if (!specialNotes.has(name)) specialNotes.set(name, []);
+    specialNotes.get(name).push({ source, note });
   };
 
   for (const cls of (character.classes || [])) {
@@ -16572,10 +16825,37 @@ function getCharacterClassSkills() {
 
     // Secondary features (mysteries, bloodlines, domains, orders…)
     for (const sf of (cls.secondaryFeatures || [])) {
-      if (!Array.isArray(sf.classSkills)) continue;
+      // Lazy-hydrate classSkills/skillNotes from class sections if missing/empty.
+      // This handles old saves (before classSkills was tracked) and the case where
+      // the skills table is built BEFORE buildClassFeaturesHtml runs its own hydration.
+      // NOTE: We do targeted skill-only extraction here to avoid touching sf.body
+      // (which would prevent the class card from re-rendering with the correct color).
+      if ((!sf.classSkills || !sf.classSkills.length) && sf.id && cls.sections) {
+        (function _hydrateSkillsOnly(sfEntry, clsObj) {
+          function _findById(id, secs) {
+            for (const s of (secs || [])) {
+              if (!s) continue;
+              if (s.section_id === id) return s;
+              const r = _findById(id, s.sections);
+              if (r) return r;
+            }
+            return null;
+          }
+          const sec = _findById(sfEntry.id, clsObj.sections || []);
+          if (!sec) return;
+          const annot = extractSFAnnotations(sec);
+          sfEntry.classSkills = annot.classSkills;
+          if (!sfEntry.skillNotes && annot.skillNotes) sfEntry.skillNotes = annot.skillNotes;
+        })(sf, cls);
+      }
+      if (!Array.isArray(sf.classSkills) || !sf.classSkills.length) continue;
       const _typeLabel = (sf.subtype && SECONDARY_SUBTYPE_LABELS[sf.subtype]) || '';
       const sfLabel    = sf.name ? (sf.name + (_typeLabel ? ` (${_typeLabel})` : '')) : clsDisplay;
       sf.classSkills.forEach(s => _add(s, sfLabel));
+      // Record skill special notes (e.g. untrained use, level-scaling bonuses from orders)
+      if (sf.skillNotes && sf.skillNotes.trim()) {
+        sf.classSkills.forEach(s => _addNote(s, sfLabel, sf.skillNotes));
+      }
     }
   }
 
@@ -16586,6 +16866,9 @@ function getCharacterClassSkills() {
       const _typeLabel = (sf.subtype && SECONDARY_SUBTYPE_LABELS[sf.subtype]) || '';
       const sfLabel    = sf.name ? (sf.name + (_typeLabel ? ` (${_typeLabel})` : '')) : 'Feature';
       sf.classSkills.forEach(s => _add(s, sfLabel));
+      if (sf.skillNotes && sf.skillNotes.trim()) {
+        sf.classSkills.forEach(s => _addNote(s, sfLabel, sf.skillNotes));
+      }
     }
   }
   if (typeof selectedArchetypes !== 'undefined') {
@@ -16601,7 +16884,7 @@ function getCharacterClassSkills() {
     liveRemovals.forEach(s => { skills.delete(s); sources.delete(s); });
   }
 
-  return { skills, sources };
+  return { skills, sources, specialNotes };
 }
 
 function calcSkillAvailableRanks() {
@@ -16718,7 +17001,7 @@ function buildSkillsSection() {
   if (!character.skillRanks) character.skillRanks = {};
   if (!character.skillMisc)  character.skillMisc  = {};
 
-  const { skills: classSkills, sources: classSkillSources } = getCharacterClassSkills();
+  const { skills: classSkills, sources: classSkillSources, specialNotes: classSkillNotes } = getCharacterClassSkills();
   const availRanks      = calcSkillAvailableRanks();
   const usedRanks       = Object.values(character.skillRanks).reduce((s, v) => s + Math.max(0, parseInt(v) || 0), 0);
   const maxRankPerSkill = Math.max(0, (character.classes || []).reduce((s, c) => s + (parseInt(c.level) || 1), 0));
@@ -16859,17 +17142,24 @@ function buildSkillsSection() {
     const hasSpecial     = conditional.length > 0;
     const hasBonuses     = skillBonuses.length > 0;
 
+    const skNotes      = classSkillNotes ? (classSkillNotes.get(sk.name) || []) : [];
+    const hasSkNotes   = skNotes.length > 0;
+    // Check if any note mentions "untrained"
+    const isUntrained  = hasSkNotes && skNotes.some(n => /untrained/i.test(n.note));
     const badges = [
-      sk.trainedOnly ? `<span title="Trained only" style="font-size:0.6rem;color:var(--text-muted);background:rgba(255,255,255,0.07);border-radius:2px;padding:0 3px;margin-left:3px;">T</span>` : '',
+      (sk.trainedOnly && !isUntrained) ? `<span title="Trained only" style="font-size:0.6rem;color:var(--text-muted);background:rgba(255,255,255,0.07);border-radius:2px;padding:0 3px;margin-left:3px;">T</span>` : '',
+      (sk.trainedOnly && isUntrained)  ? `<span title="Untrained use granted by class feature" style="font-size:0.6rem;color:#4cde6e;background:rgba(76,222,110,0.12);border:1px solid rgba(76,222,110,0.3);border-radius:2px;padding:0 3px;margin-left:3px;font-family:Cinzel,serif;letter-spacing:0.04em;">UNTRAINED</span>` : '',
       sk.acp         ? `<span title="Armor check penalty" style="font-size:0.6rem;color:#c4aa44;margin-left:2px;">⚠</span>` : '',
       hasSpecial     ? `<span title="Conditional bonuses — click for details" style="font-size:0.55rem;color:#f0c040;background:rgba(240,192,64,0.15);border:1px solid rgba(240,192,64,0.3);border-radius:2px;padding:0 4px;margin-left:4px;font-family:Cinzel,serif;letter-spacing:0.06em;">SPECIAL</span>` : '',
+      hasSkNotes     ? `<span title="${skNotes.map(n=>n.source).join(', ')} — click for notes" style="font-size:0.55rem;color:#7bbaff;background:rgba(123,186,255,0.12);border:1px solid rgba(123,186,255,0.3);border-radius:2px;padding:0 4px;margin-left:4px;font-family:Cinzel,serif;letter-spacing:0.06em;">NOTE</span>` : '',
     ].join('');
 
     // Main row
+    const _skExpandable = hasBonuses || hasSkNotes;
     const tr = document.createElement('tr');
-    tr.style.cssText = `background:${rowBg};${hasBonuses ? 'cursor:pointer;' : ''}`;
+    tr.style.cssText = `background:${rowBg};${_skExpandable ? 'cursor:pointer;' : ''}`;
     tr.setAttribute('data-skill', sk.name);
-    if (hasBonuses) {
+    if (_skExpandable) {
       tr.onclick = function(e) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
         const det = document.getElementById('sk-detail-' + skSlug);
@@ -16887,7 +17177,7 @@ function buildSkillsSection() {
 
     tr.innerHTML = `
       <td style="padding:0.3rem 0.5rem;color:${isCS ? 'var(--text-primary)' : 'var(--text-secondary)'};font-weight:${isCS ? '500' : '400'};">
-        ${hasBonuses ? `<span class="sk-expand-arr" style="font-size:0.6rem;color:var(--text-muted);margin-right:4px;display:inline-block;width:8px;">${isAllExpanded ? '▾' : '▸'}</span>` : `<span style="display:inline-block;width:12px;"></span>`}${sk.name}${badges}
+        ${_skExpandable ? `<span class="sk-expand-arr" style="font-size:0.6rem;color:var(--text-muted);margin-right:4px;display:inline-block;width:8px;">${isAllExpanded ? '▾' : '▸'}</span>` : `<span style="display:inline-block;width:12px;"></span>`}${sk.name}${badges}
         <span style="font-size:0.68rem;color:var(--text-muted);margin-left:0.25rem;">(${sk.ability.toUpperCase()})</span>
       </td>
       <td style="text-align:center;padding:0.25rem;vertical-align:middle;">
@@ -16921,7 +17211,7 @@ function buildSkillsSection() {
     tbody.appendChild(tr);
 
     // ── Expandable detail row ────────────────────────────────────────────
-    if (hasBonuses) {
+    if (_skExpandable) {
       const detailTr = document.createElement('tr');
       detailTr.id = 'sk-detail-' + skSlug;
       detailTr.style.display = isAllExpanded ? 'table-row' : 'none';
@@ -16930,16 +17220,17 @@ function buildSkillsSection() {
       detailTd.style.cssText = 'padding:0.4rem 0.5rem 0.6rem 2rem;background:rgba(255,255,255,0.02);border-bottom:1px solid rgba(255,255,255,0.06);';
 
       let dh = '<div style="font-size:0.76rem;line-height:1.8;">';
-      dh += '<div style="font-family:Cinzel,serif;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">Bonus Breakdown</div>';
-
-      // Base components
-      dh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;">
-        <span style="display:inline-block;min-width:140px;">Ability (${sk.ability.toUpperCase()}):</span>
-        <span style="color:${am < 0 ? '#e05555' : 'var(--text-primary)'};">${fmtMod(am)}</span></div>`;
-      if (isCS) {
+      if (hasBonuses) {
+        dh += '<div style="font-family:Cinzel,serif;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">Bonus Breakdown</div>';
+        // Base components
         dh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;">
-          <span style="display:inline-block;min-width:140px;">Class Skill:</span>
-          <span id="sk-cs-detail-${skSlug}" style="color:var(--text-primary);">${ranks > 0 ? '+3' : '+0 (needs ranks)'}</span></div>`;
+          <span style="display:inline-block;min-width:140px;">Ability (${sk.ability.toUpperCase()}):</span>
+          <span style="color:${am < 0 ? '#e05555' : 'var(--text-primary)'};">${fmtMod(am)}</span></div>`;
+        if (isCS) {
+          dh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;">
+            <span style="display:inline-block;min-width:140px;">Class Skill:</span>
+            <span id="sk-cs-detail-${skSlug}" style="color:var(--text-primary);">${ranks > 0 ? '+3' : '+0 (needs ranks)'}</span></div>`;
+        }
       }
 
       // Unconditional bonuses
@@ -16962,6 +17253,15 @@ function buildSkillsSection() {
           <span style="color:var(--text-muted);font-style:italic;font-size:0.72rem;">${b.conditional}</span></div>`;
       }
 
+      // Skill special notes (e.g. untrained use, order abilities) — inside the main container
+      if (hasSkNotes) {
+        dh += skNotes.map(n =>
+          `<div style="border-top:1px solid rgba(123,186,255,0.2);margin-top:0.4rem;padding-top:0.4rem;">
+            <div style="font-size:0.65rem;color:#7bbaff;font-family:Cinzel,serif;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.2rem;">📋 ${n.source}</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);line-height:1.5;">${n.note}</div>
+          </div>`
+        ).join('');
+      }
       dh += '</div>';
       detailTd.innerHTML = dh;
       detailTr.appendChild(detailTd);
@@ -16977,8 +17277,10 @@ function buildSkillsSection() {
   legend.innerHTML = `
     <span><span style="color:var(--gold);">●</span> Class skill (+3 with ranks) &nbsp;<span style="color:#4cde6e;">●</span> Class skill via feature</span>
     <span style="opacity:0.7;"><span style="background:rgba(255,255,255,0.07);border-radius:2px;padding:0 3px;font-size:0.62rem;">T</span> Trained only</span>
+    <span style="opacity:0.7;"><span style="color:#4cde6e;background:rgba(76,222,110,0.12);border:1px solid rgba(76,222,110,0.3);border-radius:2px;padding:0 3px;font-size:0.6rem;">UNTRAINED</span> Class feature grants untrained use</span>
     <span style="opacity:0.7;"><span style="color:#c4aa44;">⚠</span> Armor check penalty applies</span>
-    <span style="opacity:0.7;"><span style="color:#f0c040;background:rgba(240,192,64,0.15);border:1px solid rgba(240,192,64,0.3);border-radius:2px;padding:0 3px;font-size:0.6rem;">SPECIAL</span> Conditional bonus (click row for details)</span>`;
+    <span style="opacity:0.7;"><span style="color:#f0c040;background:rgba(240,192,64,0.15);border:1px solid rgba(240,192,64,0.3);border-radius:2px;padding:0 3px;font-size:0.6rem;">SPECIAL</span> Conditional bonus (click row for details)</span>
+    <span style="opacity:0.7;"><span style="color:#7bbaff;background:rgba(123,186,255,0.12);border:1px solid rgba(123,186,255,0.3);border-radius:2px;padding:0 3px;font-size:0.6rem;">NOTE</span> Class feature note (click row for details)</span>`;
   body.appendChild(legend);
 
   // body is already appended to skillCard (inside the unified card) above
@@ -17945,8 +18247,9 @@ function renderCharacter() {
 
     // Determine grid columns based on class count - expand when fewer classes
     const classCount = character.classes.length;
+    const _isMobile = window.innerWidth <= 768;
     let gridTemplate;
-    if (classCount === 1) {
+    if (_isMobile || classCount === 1) {
       gridTemplate = '1fr';
     } else if (classCount === 2) {
       gridTemplate = '1fr 1fr';
@@ -17954,23 +18257,11 @@ function renderCharacter() {
       gridTemplate = 'repeat(auto-fill,minmax(400px,1fr))';
     }
 
-    // Cards row - all class cards in one row
-    const cardsRow = document.createElement('div');
-    cardsRow.style.cssText = `display:grid;grid-template-columns:${gridTemplate};gap:0;`;
-
-    // Progression row - aligned below cards
-    const progressionSection = document.createElement('div');
-    progressionSection.style.cssText = 'border-top:2px solid var(--border);';
-    
-    const tablesRow = document.createElement('div');
-    tablesRow.style.cssText = `display:grid;grid-template-columns:${gridTemplate};gap:0;background:var(--bg-surface);`;
-
-    // Features row - aligned below progression
-    const featuresSection = document.createElement('div');
-    featuresSection.style.cssText = 'border-top:2px solid var(--border);';
-    
-    const featuresRow = document.createElement('div');
-    featuresRow.style.cssText = `display:grid;grid-template-columns:${gridTemplate};gap:0;background:var(--bg-deep);`;
+    // One grid — each cell is a full class column (card + table + features).
+    // Mobile: single column so card→table→features stays together per class.
+    // Desktop: up to 2 columns side-by-side.
+    const classesGrid = document.createElement('div');
+    classesGrid.style.cssText = `display:grid;grid-template-columns:${gridTemplate};gap:0;`;
 
     character.classes.forEach((cls, clsIdx) => {
       const clsName = cls.name || cls._name;
@@ -18134,7 +18425,9 @@ function renderCharacter() {
         for (const sf of topLevelSFs) {
           const typeLabel  = SECONDARY_SUBTYPE_LABELS[sf.subtype] || sf.subtype.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
           const safeClsName = clsName.replace(/'/g, "\\'");
-          const hasBody    = !!(sf.body && sf.body.trim());
+          // Hydrate sf.body from class section tree if stripped on save
+          const _sfCardBody = _sfBodyFromClass(sf, cls, clsColor);
+          const hasBody    = !!(_sfCardBody && _sfCardBody.trim());
 
           // ── Full-content card for this selection — collapsed by default ─────
           const sfBodyId = `sf-card-body-${sf.id}`;
@@ -18151,7 +18444,7 @@ function renderCharacter() {
               <button onclick="event.stopPropagation();removeSecondaryFeatureFromCharacter('${safeClsName}',${sf.id})"
                 style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:0.8rem;padding:0 0.25rem;flex-shrink:0;" title="Remove ${typeLabel}">✕</button>
             </div>
-            ${hasBody ? `<div id="${sfBodyId}" style="display:none;padding:0.6rem 1.25rem 0.75rem 1.4rem;font-size:0.85rem;color:var(--text-secondary);line-height:1.6;">${sf.body}</div>` : ''}
+            ${hasBody ? `<div id="${sfBodyId}" style="display:none;padding:0.6rem 1.25rem 0.75rem 1.4rem;font-size:0.85rem;color:var(--text-secondary);line-height:1.6;">${_sfCardBody}</div>` : ''}
           `;
           sfDiv.appendChild(sfCard);
         }
@@ -18333,22 +18626,34 @@ function renderCharacter() {
         }
       }
 
-      // Card goes into cardsRow (no wrapper, just the card)
-      cardsRow.appendChild(cardEl);
+      // ── Per-class column: card + progression table + features ────────────
+      // All three live inside classCol so on mobile they stay together as
+      // a unit (card → table → features) rather than being split across rows.
+      const classCol = document.createElement('div');
+      classCol.style.cssText = 'display:flex;flex-direction:column;';
+      classCol.appendChild(cardEl);
 
-      // ── Progression table cell (goes into tablesRow) ─────────────────────
+      // ── Progression table ─────────────────────────────────────────────
+      const tableSection = document.createElement('div');
+      tableSection.style.cssText = 'border-top:2px solid var(--border);';
       const tableWrap = document.createElement('div');
       tableWrap.className = 'char-class-table-outer';
       tableWrap.style.cssText = `background:linear-gradient(to bottom, ${clsColor}08, var(--bg-surface));padding:1rem 1.5rem;min-height:200px;border-left:2px solid ${clsColor};display:flex;flex-direction:column;`;
       tableWrap.innerHTML = '<div class="char-class-table-spinner"><span class="mini-spinner"></span>Loading…</div>';
-      tablesRow.appendChild(tableWrap);
+      tableSection.appendChild(tableWrap);
+      classCol.appendChild(tableSection);
 
-      // ── Features cell (goes into featuresRow) ────────────────────────────
+      // ── Features ──────────────────────────────────────────────────────
+      const featSection = document.createElement('div');
+      featSection.style.cssText = 'border-top:2px solid var(--border);flex:1;';
       const featWrap = document.createElement('div');
       featWrap.className = 'char-class-features-outer';
-      featWrap.style.cssText = `background:linear-gradient(to bottom, ${clsColor}08, var(--bg-deep));padding:1rem 1.5rem;min-height:200px;border:none;border-radius:0;border-left:2px solid ${clsColor};`;
+      featWrap.style.cssText = `background:linear-gradient(to bottom, ${clsColor}08, var(--bg-deep));padding:1rem 1.5rem;min-height:200px;border:none;border-radius:0;border-left:2px solid ${clsColor};height:100%;`;
       featWrap.innerHTML = '<div class="char-class-table-spinner"><span class="mini-spinner"></span>Loading…</div>';
-      featuresRow.appendChild(featWrap);
+      featSection.appendChild(featWrap);
+      classCol.appendChild(featSection);
+
+      classesGrid.appendChild(classCol);
 
       // Async: load full detail, populate table + features cells
       (async function(clsObj, tw, fw) {
@@ -18628,11 +18933,7 @@ function renderCharacter() {
       })(cls, tableWrap, featWrap);
     });
 
-    unifiedCard.appendChild(cardsRow);
-    progressionSection.appendChild(tablesRow);
-    unifiedCard.appendChild(progressionSection);
-    featuresSection.appendChild(featuresRow);
-    unifiedCard.appendChild(featuresSection);
+    unifiedCard.appendChild(classesGrid);
 
     section.appendChild(unifiedCard);
     container.appendChild(section);
@@ -18938,15 +19239,18 @@ function renderCharacter() {
     // ── Classification maps ───────────────────────────────────────────────────
     // PREPARED_FULL: know ALL spells on list, choose which to prepare each day
     const PREPARED_FULL_CLASSES = new Set([
-      'cleric','druid','paladin','ranger','hunter','warpriest','shaman'
+      'cleric','druid','paladin','antipaladin','ranger','warpriest','shaman'
     ]);
     // PREPARED_SPELLBOOK: record spells in book, prepare a subset each day
     const PREPARED_BOOK_CLASSES = new Set([
       'wizard','magus','arcanist','alchemist','investigator','witch'
     ]);
     // SPONTANEOUS: know fixed # of spells, cast any without preparing
+    // Hunter (ACG): 6-level WIS spontaneous caster with Spells Known table (like Inquisitor)
+    // Skald (ACG): 6-level CHA spontaneous caster with Spells Known table (like Bard)
     const SPONTANEOUS_CLASSES_SET = new Set([
-      'sorcerer','bard','oracle','summoner','inquisitor','bloodrager','skald'
+      'sorcerer','bard','oracle','summoner','inquisitor','bloodrager',
+      'hunter','skald',
     ]);
 
     const _extractClasses  = new Set(['alchemist','investigator']);
@@ -19454,6 +19758,17 @@ function updateNavTabGating() {
     }
   });
   updateAbilityScoresFab();
+  // Mirror lock state onto overlay items
+  document.querySelectorAll('.mobile-nav-overlay-item[data-page]').forEach(item => {
+    const page = item.getAttribute('data-page');
+    const srcTab = document.querySelector(`.nav-tab[data-page="${page}"]`);
+    if (srcTab) {
+      item.classList.toggle('nav-locked', srcTab.classList.contains('nav-locked'));
+      const reason = srcTab.getAttribute('data-lock-reason');
+      if (reason) item.setAttribute('data-lock-reason', reason);
+      else item.removeAttribute('data-lock-reason');
+    }
+  });
 }
 
 function updateAbilityScoresFab() {
@@ -19549,8 +19864,17 @@ function toggleNavLock() {
 }
 
 // Switch page
+function toggleNavMenu() {
+  const overlay = document.getElementById('mobile-nav-overlay');
+  if (!overlay) return;
+  const isOpen = overlay.classList.contains('open');
+  overlay.classList.toggle('open', !isOpen);
+  // Animate hamburger to X when open
+  document.querySelector('nav').classList.toggle('menu-open', !isOpen);
+}
+
 function switchPage(page) {
-  // Intercept clicks on locked tabs — show a toast explaining what's needed
+  // Intercept clicks on locked tabs — show a toast explaining what's needed (before closing overlay)
   const tabEl = document.querySelector(`.nav-tab[data-page="${page}"]`);
   if (tabEl && tabEl.classList.contains('nav-locked')) {
     const reason = tabEl.getAttribute('data-lock-reason') || '🔒 Complete prerequisites first';
@@ -19558,11 +19882,18 @@ function switchPage(page) {
     return;
   }
 
+  // Close mobile hamburger menu / overlay on navigation
+  document.querySelector('nav').classList.remove('menu-open');
+  const _mno = document.getElementById('mobile-nav-overlay');
+  if (_mno) _mno.classList.remove('open');
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.mobile-nav-overlay-item').forEach(t => t.classList.remove('active'));
 
   document.getElementById(`page-${page}`).classList.add('active');
-  document.querySelector(`[onclick="switchPage('${page}')"]`).classList.add('active');
+  document.querySelectorAll(`.nav-tab[data-page="${page}"]`).forEach(el => el.classList.add('active'));
+  document.querySelectorAll(`.mobile-nav-overlay-item[data-page="${page}"]`).forEach(el => el.classList.add('active'));
   
   if (page === 'character') {
     renderCharacter();
@@ -19592,6 +19923,8 @@ function updateBadge() {
   const badge = document.getElementById('badge');
   badge.textContent = total;
   badge.style.display = total > 0 ? 'flex' : 'none';
+  const badgeOv = document.getElementById('badge-overlay');
+  if (badgeOv) { badgeOv.textContent = total; badgeOv.style.display = total > 0 ? 'flex' : 'none'; }
 }
 
 // Toggle subtype table (e.g., alchemist discoveries, rogue talents)
