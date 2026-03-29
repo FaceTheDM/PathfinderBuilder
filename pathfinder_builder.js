@@ -12,18 +12,18 @@ const DB_FILES = [
   'book-um.db',
   'book-arg.db',
   'book-acg.db',
-  // 'book-b1.db',
-  // 'book-b2.db',
-  // 'book-b3.db',
-  // 'book-b4.db',
-  // 'book-gmg.db',
-  // 'book-ma.db',
-  // 'book-mc.db',
-  // 'book-npc.db',
-  // 'book-tech.db',
-  // 'book-ucampaign.db',
   'book-ucampaign.db',
-  // 'book-ue.db',
+  // Uncomment to enable additional sourcebooks:
+  // 'book-b1.db',    // Bestiary 1
+  // 'book-b2.db',    // Bestiary 2
+  // 'book-b3.db',    // Bestiary 3
+  // 'book-b4.db',    // Bestiary 4
+  // 'book-gmg.db',   // GameMastery Guide
+  // 'book-ma.db',    // Mythic Adventures
+  // 'book-mc.db',    // Monster Codex
+  // 'book-npc.db',   // NPC Codex
+  // 'book-tech.db',  // Technology Guide
+  // 'book-ue.db',    // Ultimate Equipment
 ];
 
 // sql.js CDN
@@ -42,6 +42,9 @@ let currentEquipmentSubcategory = null;
 let equipmentTabCache = {};
 let equipmentManifestIndex = null;
 let character = { race:null, classes:[], favoredClassIndex:0, feats:[], traits:[], equipment:[], spells:[], preparedSpells:{}, deity:null, skillRanks:{}, skillMisc:{}, promptedFeatSlots:0,
+  // Favored class bonus choices: hp/skill/race counters that must sum ≤ favored class level.
+  // 'race' counts uses of the ARG race-specific bonus for the favored class.
+  favoredClassBonuses: { hp:0, skill:0, race:0 },
   currency: { gp:0, sp:0, cp:0 }, _wealthGranted: false,
   languages: [],
   stats: {
@@ -63,7 +66,12 @@ let character = { race:null, classes:[], favoredClassIndex:0, feats:[], traits:[
   statsLocked: {},
   notes: [],
   statBonuses: [],
-  equipped: {}
+  equipped: {},
+  traitSkillChoices: {},      // traitName → chosen skill name (for choice-based traits)
+  featChoices: {},            // featName  → chosen option string (skill, weapon type, spell school, etc.)
+  featToggles:  {},           // featKey (lowercase) → true/false (active combat toggle)
+  skillAbilityOverrides: {},  // skillName → ability key (e.g. 'Intimidate' → 'int') for ability-sub traits
+  customSkillLines: [],       // string[] — custom Craft/Profession/Perform subcategory names
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -207,11 +215,38 @@ const RACE_LANGUAGES = {
   'Wayangs':     ['Common','Wayang'],
 };
 
+// ── Race name normaliser ─────────────────────────────────────────────────────
+// Returns the matching key from a race data table, handling plural/singular and
+// case variations (e.g. 'dwarf', 'Dwarf', 'Dwarves' all resolve correctly).
+// Uses a per-table WeakMap cache so the O(n) scan only runs once per table.
+const _raceKeyCache = new WeakMap();
+function raceKey(name, table) {
+  if (!name) return '';
+  if (name in table) return name;                    // fast path — exact match
+  if (!_raceKeyCache.has(table)) {
+    const idx = {};
+    for (const k of Object.keys(table)) {
+      const lower = k.toLowerCase();
+      // When both singular and plural are present, prefer the plural form
+      // (plural names are what the DB returns, e.g. "Dwarves" not "Dwarf")
+      if (!idx[lower] || k.endsWith('s')) idx[lower] = k;
+    }
+    _raceKeyCache.set(table, idx);
+  }
+  const idx = _raceKeyCache.get(table);
+  const lower = name.toLowerCase();
+  if (idx[lower])          return idx[lower];        // case-insensitive match
+  if (idx[lower + 's'])    return idx[lower + 's'];  // try adding plural 's'
+  if (lower.endsWith('s') && idx[lower.slice(0, -1)])
+    return idx[lower.slice(0, -1)];                  // try dropping trailing 's'
+  return '';
+}
+
 // Returns the canonical list of languages for a character given their current race and INT score.
 // Does NOT auto-modify character.languages — caller decides what to do.
 function getRaceBaseLanguages() {
   const raceName = character.race ? (character.race.name || character.race._name || '') : '';
-  return RACE_LANGUAGES[raceName] || (raceName ? ['Common'] : []);
+  return RACE_LANGUAGES[raceKey(raceName, RACE_LANGUAGES)] || (raceName ? ['Common'] : []);
 }
 
 // ── Class Feature Effects — maps class features to stat modifications ────────
@@ -237,26 +272,26 @@ const CLASS_FEATURE_EFFECTS = {
       value: lv => lv<3?0 : lv<6?10 : lv<9?20 : lv<12?30 : lv<15?40 : lv<18?50 : 60,
       label: lv => { const v = lv<3?0 : lv<6?10 : lv<9?20 : lv<12?30 : lv<15?40 : lv<18?50 : 60; return `+${v} ft speed` }
     },
-    // Still Mind +2 vs enchantment (general will bonus approximation)
-    { feature:'Still Mind', minLevel:3, stat:'will_misc', value:2, label:'+2 Will vs enchantment' },
+    // Still Mind: +2 Will vs enchantment spells — conditional, not added to save total
+    { feature:'Still Mind', minLevel:3, stat:'cond_will', value:2, label:'+2 Will vs enchantment' },
   ],
   'Fighter': [
-    // Bravery: +1 Will vs fear at 2nd, +1 every 4 levels after (6,10,14,18)
-    { feature:'Bravery', minLevel:2, stat:'will_misc',
+    // Bravery: +1 Will vs fear — conditional, not added to save total
+    { feature:'Bravery', minLevel:2, stat:'cond_will',
       value: lv => lv<2?0 : Math.floor((lv-2)/4)+1,
       label: lv => `+${Math.floor((lv-2)/4)+1} Will vs fear`
     },
-    // Armor Training: reduce armor check penalty and increase max dex
-    { feature:'Armor Training', minLevel:3, stat:'ac_misc',
+    // Armor Training: reduce ACP and raise Max DEX cap (wired in getEquippedACP / getEquippedMaxDex)
+    { feature:'Armor Training', minLevel:3, stat:'_info',
       value: lv => lv<3?0 : lv<7?1 : lv<11?2 : lv<15?3 : 4,
-      label: lv => { const v = lv<3?0 : lv<7?1 : lv<11?2 : lv<15?3 : 4; return `+${v} max DEX (armor)` }
+      label: lv => { const v = lv<3?0 : lv<7?1 : lv<11?2 : lv<15?3 : 4; return `Armor Training ${v}: −${v} ACP / +${v} Max DEX` }
     },
   ],
   'Rogue': [
-    // Trap Sense: +1 Ref vs traps and +1 dodge AC vs traps per 3 levels
-    { feature:'Trap Sense', minLevel:3, stat:'ref_misc',
+    // Trap Sense: +N Ref vs traps AND +N dodge AC vs traps — conditional, not added to total
+    { feature:'Trap Sense', minLevel:3, stat:'cond_ref',
       value: lv => lv<3?0 : Math.floor((lv-3)/3)+1,
-      label: lv => `+${Math.floor((lv-3)/3)+1} Ref vs traps`
+      label: lv => `+${Math.floor((lv-3)/3)+1} Ref & dodge AC vs traps`
     },
   ],
   'Paladin': [
@@ -279,8 +314,8 @@ const CLASS_FEATURE_EFFECTS = {
   'Druid': [
     // Nature Sense: +2 Knowledge(nature) and Survival
     { feature:'Nature Sense', minLevel:1, stat:'_info', value:2, label:'+2 K.Nature & Survival' },
-    // Resist Nature\'s Lure: +4 vs spell-like abilities of fey and plant-targeting effects
-    { feature:"Resist Nature's Lure", minLevel:4, stat:'will_misc', value:4, label:"+4 Will vs fey/plant" },
+    // Resist Nature's Lure: +4 vs spell-like abilities of fey and plant effects — conditional
+    { feature:"Resist Nature's Lure", minLevel:4, stat:'cond_will', value:4, label:"+4 Will vs fey/plant spells" },
   ],
   'Sorcerer': [
     // Bloodline powers are too varied to generalize
@@ -292,10 +327,10 @@ const CLASS_FEATURE_EFFECTS = {
     // Tactician, banner effects are conditional
   ],
   'Alchemist': [
-    // Poison Resistance: +2/+4/+6 vs poison, then immune
-    { feature:'Poison Resistance', minLevel:2, stat:'fort_misc',
-      value: lv => lv<2?0 : lv<5?2 : lv<8?4 : 6,
-      label: lv => `+${lv<2?0 : lv<5?2 : lv<8?4 : 6} vs poison`
+    // Poison Resistance: +2/+4/+6 vs poison (lvl 2/5/8); immune at lvl 10 — conditional, not in save total
+    { feature:'Poison Resistance', minLevel:2, stat:'cond_fort',
+      value: lv => lv<10 ? (lv<5?2 : lv<8?4 : 6) : 1,  // 1 at 10+ so entry isn't skipped; label shows Immunity
+      label: lv => lv>=10 ? 'Immune to Poison' : `+${lv<5?2:lv<8?4:6} Fort vs poison`
     },
     // Swift Poisoning, Mutagen bonuses are use-activated
   ],
@@ -333,6 +368,33 @@ const CLASS_FEATURE_EFFECTS = {
     { feature:'Unholy Resilience', minLevel:2, stat:'ref_misc',  value:'abil:cha', label:'CHA to saves' },
     { feature:'Unholy Resilience', minLevel:2, stat:'will_misc', value:'abil:cha', label:'CHA to saves' },
   ],
+  // ── ACG hybrid classes ──────────────────────────────────────────────────────
+  'Swashbuckler': [
+    // Nimble: +1 dodge bonus to AC at 3rd, +1 per 4 levels after (7,11,15,19)
+    { feature:'Nimble', minLevel:3, stat:'ac_misc',
+      value: lv => lv<3?0 : lv<7?1 : lv<11?2 : lv<15?3 : lv<19?4 : 5,
+      label: lv => { const v = lv<3?0 : lv<7?1 : lv<11?2 : lv<15?3 : lv<19?4 : 5; return `+${v} dodge AC (nimble)` }
+    },
+  ],
+  'Bloodrager': [
+    // Fast Movement: +10 ft at level 1 (while not in medium/heavy armor)
+    { feature:'Fast Movement', minLevel:1, stat:'speed', value:10, label:'+10 ft speed' },
+    // Blood Sanctuary: +2 saves vs spells cast by self or allies — highly conditional
+    { feature:'Blood Sanctuary', minLevel:9, stat:'cond_fort', value:2, label:'+2 Fort vs spells (self/ally casters)' },
+    { feature:'Blood Sanctuary', minLevel:9, stat:'cond_ref',  value:2, label:'+2 Ref vs spells (self/ally casters)' },
+    { feature:'Blood Sanctuary', minLevel:9, stat:'cond_will', value:2, label:'+2 Will vs spells (self/ally casters)' },
+  ],
+  'Brawler':    [],   // Martial Flexibility and Maneuver Training are action/choice-based
+  'Hunter':     [],   // Animal Focus bonuses are conditional/activated
+  'Skald':      [],   // Inspired Rage is conditional; no passive stat bonuses
+  // ── Occult Adventures classes (no DB yet; stub entries to prevent fallback to empty) ──
+  'Kineticist':   [],  // Elemental Defense varies by element chosen
+  'Medium':       [],  // Spirit bonuses are conditional on spirit channeled
+  'Mesmerist':    [],  // Hypnotic Stare and tricks are use-activated
+  'Occultist':    [],  // Focus powers are resource-based
+  'Psychic':      [],  // Phrenic amplifications are use-activated
+  'Spiritualist': [],  // Phantom bonuses are conditional on phantom presence
+  'Vigilante':    [],  // Social talents vary greatly by archetype
 };
 
 // ── Race Feature Effects — passive racial bonuses to combat stats ────────────
@@ -394,6 +456,65 @@ const RACE_FEATURE_EFFECTS = {
   ],
 };
 
+// ── Alt racial trait suppression map ──────────────────────────────────────────
+// Maps alt racial trait name (lowercase) → array of base feature names (lowercase)
+// in RACE_FEATURE_EFFECTS that this alt trait replaces.
+// When an alt trait is active, its suppressed base features are skipped.
+const ALT_RACIAL_TRAIT_REPLACES = {
+  // ── Dwarf (APG / ARG) ─────────────────────────────────────────────────────
+  'magic resistant': ['hardy'],          // +4 Will vs magic instead of +2 Fort (Hardy)
+  'stubborn':        ['hardy'],          // +2 Will vs enchant instead of +2 Fort (Hardy)
+  'grounded':        ['stability'],      // +2 CMD instead of +4 CMD (Stability)
+  'relentless':      ['stability'],      // +2 CMB/CMD on grapple instead of Stability
+  'lorekeeper':      [],                 // replaces Greed — no RACE_FEATURE_EFFECTS entry
+  'craftsman':       [],                 // replaces Greed — no RACE_FEATURE_EFFECTS entry
+  // ── Halfling (APG / ARG) ──────────────────────────────────────────────────
+  'blessed':         ['halfling luck', 'fearless'],   // replaces both; grants +2 vs curses/fear
+  'craven':          ['fearless'],                    // replaces Fearless; no flat stat replacement
+  'adaptable luck':  ['halfling luck'],               // replaces Halfling Luck; luck re-rolls instead
+  // ── Gnome (APG / ARG) ─────────────────────────────────────────────────────
+  'academician':     ['illusion resistance'],         // replaces Illusion Resistance; Knowledge instead
+  'fell magic':      ['illusion resistance'],         // replaces Illusion Resistance; spells only
+  'gift of tongues': ['illusion resistance'],         // replaces Gnome Magic, Illusion Resistance
+  // ── Elf (APG / ARG) ───────────────────────────────────────────────────────
+  'lightbringer':    ['elven immunities'],            // replaces Elven Immunities; light abilities
+  'envoy':           ['elven immunities'],            // replaces Elven Immunities; tongues 1/day
+  // ── Half-Elf (APG / ARG) ──────────────────────────────────────────────────
+  'water child':     ['elven immunities'],            // replaces Elven Immunities; water affinity
+  // ── Dhampir ───────────────────────────────────────────────────────────────
+  'dayborn':         ['undead resistance'],           // replaces Undead Resistance; loses negative energy resistance
+};
+
+// ── Alt racial trait bonus effects ────────────────────────────────────────────
+// Maps alt racial trait name (lowercase) → array of {stat, value, label} bonuses.
+// Only flat, unconditional bonuses are modeled (conditional bonuses are noted in comments).
+const ALT_RACIAL_TRAIT_EFFECTS = {
+  // ── Dwarf ─────────────────────────────────────────────────────────────────
+  'magic resistant': [
+    { stat:'will_misc', value:4, label:'+4 Will vs magic (Magic Resistant)' },
+  ],
+  'stubborn': [
+    { stat:'will_misc', value:2, label:'+2 Will vs enchantment (Stubborn)' },
+  ],
+  'grounded': [
+    { stat:'cmd_misc',  value:2, label:'+2 CMD vs bull rush/trip (Grounded)' },
+  ],
+  'relentless': [
+    { stat:'cmb_misc',  value:2, label:'+2 CMB vs grapple (Relentless)' },
+    { stat:'cmd_misc',  value:2, label:'+2 CMD vs grapple (Relentless)' },
+  ],
+  // ── Halfling ──────────────────────────────────────────────────────────────
+  'blessed': [
+    // Replaces +1 all saves (Halfling Luck) + +2 Will vs fear (Fearless)
+    // Grants +2 saving throws vs curse/compulsion/fear (approximated as Will)
+    { stat:'will_misc', value:2, label:'+2 vs curses/compulsion/fear (Blessed)' },
+  ],
+  // 'craven': no flat stat bonus (morale to attacks when frightened — conditional)
+  // 'adaptable luck': no flat stat bonus (re-rolls instead of save bonus)
+  // ── Gnome ─────────────────────────────────────────────────────────────────
+  // academician, fell magic, gift of tongues: no flat stat bonuses
+};
+
 // Source colors for bonus breakdown pills
 const SOURCE_COLORS = {
   race:  {bg:'#1a2a3a', border:'#3a6a9a', text:'#7ab8e8', label:'Race'},
@@ -421,12 +542,13 @@ function getTotalBonus(stat) {
 
 // Recompute stat bonuses from all character sources
 function recomputeStatBonuses() {
+  _cachedSkillBonuses = null; // clear so next getSkillBonuses() call repopulates
   const bonuses = [];
 
   // ── Race bonuses ──────────────────────────────────────────────────────────
   if (character.race) {
     const raceName = character.race.name || character.race._name || '';
-    const raceData = RACE_STAT_TABLE[raceName] || RACE_STAT_TABLE[raceName.replace(/s$/,'')];
+    const raceData = RACE_STAT_TABLE[raceKey(raceName, RACE_STAT_TABLE)];
     if (raceData) {
       Object.entries(raceData.stats || {}).forEach(([stat, val]) => {
         bonuses.push({
@@ -449,13 +571,43 @@ function recomputeStatBonuses() {
     }
 
     // ── Race feature effects (Hardy, Halfling Luck, etc.) ──────────────────
-    const raceFx = RACE_FEATURE_EFFECTS[raceName] || [];
+    // Build set of base features suppressed by selected alternate racial traits
+    const _suppressedRaceFeatures = new Set();
+    for (const at of (character.race.altTraits || [])) {
+      const atKey = (at.name || '').toLowerCase();
+      const suppress = ALT_RACIAL_TRAIT_REPLACES[atKey] || [];
+      suppress.forEach(f => _suppressedRaceFeatures.add(f));
+    }
+
+    const raceFx = RACE_FEATURE_EFFECTS[raceKey(raceName, RACE_FEATURE_EFFECTS)] || [];
     for (const fx of raceFx) {
       if (fx.stat === '_info' || fx.value === 0) continue;
+      // Skip if replaced by an active alternate racial trait
+      if (_suppressedRaceFeatures.has(fx.feature.toLowerCase())) continue;
       bonuses.push({
         source: fx.feature, sourceType: 'race', stat: fx.stat, value: fx.value, label: fx.label
       });
     }
+
+    // ── Alternate racial trait stat bonuses ─────────────────────────────────
+    for (const at of (character.race.altTraits || [])) {
+      const atKey = (at.name || '').toLowerCase();
+      const atName = at.name || atKey;
+      const atFx = ALT_RACIAL_TRAIT_EFFECTS[atKey] || [];
+      for (const fx of atFx) {
+        if (fx.stat === '_info' || !fx.value) continue;
+        bonuses.push({
+          source: atName, sourceType: 'race', stat: fx.stat, value: fx.value, label: fx.label
+        });
+      }
+    }
+  }
+
+  // ── Favored class HP bonus ────────────────────────────────────────────────
+  const _fcHp = (character.favoredClassBonuses?.hp) || 0;
+  if (_fcHp > 0) {
+    bonuses.push({ source:'Favored Class', sourceType:'class', stat:'hp', value:_fcHp,
+      label:`+${_fcHp} HP (favored class)` });
   }
 
   // ── Class bonuses (BAB, base saves) from progression tables ──────────────
@@ -503,6 +655,234 @@ function recomputeStatBonuses() {
     }
   }
 
+  // ── Feat stat bonuses ──────────────────────────────────────────────────────
+  // Toughness scales with total HD, so we compute that once here.
+  const _totalHD = (character.classes || []).reduce((s, c) => s + (parseInt(c.level)||1), 0);
+  for (const feat of (character.feats || [])) {
+    const featName = (feat.name || feat._name || '').trim();
+    const featKey  = featName.toLowerCase();
+
+    // ── Choice-based feats: embed the stored choice into the label ──────────
+    // For feats like "Weapon Focus" where the player chose a weapon/school/skill,
+    // include the choice in the bonus label for clarity in breakdowns.
+    const _featChoice = (character.featChoices || {})[featName];
+
+    const effects  = FEAT_EFFECTS[featKey];
+    if (effects) {
+      for (const fx of effects) {
+        if (fx.stat === '_info') continue;
+        let val = fx.value;
+        if (val === '_toughness') val = Math.max(3, _totalHD);  // +3 HP, +1 per HD beyond 3
+        if (!val) continue;
+        // Inject chosen option into label (e.g. "Weapon Focus" → "Weapon Focus (Longsword) +1")
+        const lbl = _featChoice
+          ? fx.label.replace(`(${featName})`, `(${_featChoice})`).replace(/ \(([^)]+)\)\s*$/, ` (${_featChoice})`)
+          : fx.label;
+        bonuses.push({ source: featName, sourceType: 'feat', stat: fx.stat, value: val, label: lbl });
+      }
+    }
+
+    // ── Weapon Focus / Greater Weapon Focus: +1 attack ONLY with chosen weapon ──
+    // Removed from FEAT_EFFECTS so we can gate it on the weapon being equipped.
+    if (featKey === 'weapon focus' || featKey === 'greater weapon focus') {
+      if (!_featChoice) {
+        // No choice stored — backward compatibility: apply unconditionally with generic label
+        bonuses.push({ source: featName, sourceType: 'feat', stat: 'melee_misc', value: 1,
+          label: `+1 attack (${featName})` });
+      } else {
+        // Unarmed Strike is always "equipped"; all other choices require the weapon in equipped
+        const _wfUnarmed  = _featChoice.toLowerCase() === 'unarmed strike';
+        const _wfEquipped = _wfUnarmed || Object.keys(character.equipped || {}).some(
+          nm => nm.toLowerCase() === _featChoice.toLowerCase() && character.equipped[nm] === 'weapon'
+        );
+        if (_wfEquipped) {
+          // Determine melee vs ranged from weaponMiscMap (range_inc > 0 → ranged weapon)
+          const _wfData   = typeof weaponMiscMap !== 'undefined' ? weaponMiscMap[_featChoice.toLowerCase()] : null;
+          const _wfRanged = _wfData && _wfData.range && parseInt(_wfData.range) > 0;
+          bonuses.push({ source: featName, sourceType: 'feat',
+            stat: _wfRanged ? 'ranged_misc' : 'melee_misc', value: 1,
+            label: `+1 attack (${featName} \u2014 ${_featChoice})` });
+        }
+      }
+    }
+
+    // ── Weapon Specialization: +2 damage with chosen weapon ─────────────────
+    // Not in FEAT_EFFECTS since we need the choice + equipped check.
+    if ((featKey === 'weapon specialization' || featKey === 'greater weapon specialization') && _featChoice) {
+      const dmgBonus = featKey === 'greater weapon specialization' ? 4 : 2;
+      const _wsUnarmed  = _featChoice.toLowerCase() === 'unarmed strike';
+      const _wsEquipped = _wsUnarmed || Object.keys(character.equipped || {}).some(
+        nm => nm.toLowerCase() === _featChoice.toLowerCase() && character.equipped[nm] === 'weapon'
+      );
+      if (_wsEquipped) {
+        bonuses.push({ source: featName, sourceType: 'feat', stat: 'dmg_misc',
+          value: dmgBonus, label: `+${dmgBonus} damage with ${_featChoice} (${featName})` });
+      }
+    }
+
+    // ── Spell Focus: +1 DC per chosen school — informational (DC not tracked) ─
+    if ((featKey === 'spell focus' || featKey === 'greater spell focus') && _featChoice) {
+      const dcBonus = featKey === 'greater spell focus' ? 2 : 1;
+      bonuses.push({ source: featName, sourceType: 'feat', stat: '_info',
+        value: dcBonus, label: `+${dcBonus} spell DC — ${_featChoice} (${featName})` });
+    }
+  }
+
+  // ── Toggleable feat / combat-option bonuses ────────────────────────────────
+  {
+    const _bab = (character.classes || []).reduce((s, c) => {
+      const p = parseClassProgression(c);
+      return s + (p ? p.bab : 0);
+    }, 0);
+    const _acroRanks = parseInt((character.skillRanks || {})['Acrobatics'] || 0);
+    const _primaryWeapon = Object.keys(character.equipped || {}).find(
+      nm => character.equipped[nm] === 'weapon'
+    );
+    const _isTwoHanded = _primaryWeapon &&
+      typeof weaponMiscMap !== 'undefined' &&
+      weaponMiscMap[_primaryWeapon.toLowerCase()] &&
+      (weaponMiscMap[_primaryWeapon.toLowerCase()].wc || '').toLowerCase().includes('two-hand');
+
+    for (const [toggleKey, toggleDef] of Object.entries(TOGGLEABLE_FEATS)) {
+      if (!character.featToggles[toggleKey]) continue;
+      const isCombatOption = !toggleDef.isFeat;
+      if (!isCombatOption) {
+        const hasFeat = (character.feats || []).some(f =>
+          (f.name || f._name || '').toLowerCase() === toggleKey
+        );
+        if (!hasFeat) continue;
+      }
+      for (const fx of toggleDef.bonuses) {
+        const val = typeof fx.value === 'function'
+          ? fx.value(_bab, _isTwoHanded, _acroRanks) : fx.value;
+        if (val === 0 || val === undefined || val === null) continue;
+        const lbl = typeof fx.label === 'function'
+          ? fx.label(_bab, _isTwoHanded, _acroRanks) : fx.label;
+        bonuses.push({ source: toggleDef.label, sourceType: 'feat', stat: fx.stat,
+          value: val, label: lbl });
+      }
+    }
+  }
+
+  // ── Conditional-language detection patterns (used by dynamic save/init/AC parser) ──
+  // If the sentence containing a bonus match contains any of these, treat bonus as conditional.
+  const _COND_RX = [
+    /\b(?:as\s+long\s+as|while|when(?:ever)?|only\s+(?:if|when)|against|vs\.?|during|if\s+you)\b/i,
+    /\b(?:for\s+\d+\s+(?:round|minute|hour))/i,
+    /\b(?:once\s+per\s+day)\b/i,
+    /\b(?:within\s+\d+\s+(?:feet|ft))\b/i,
+  ];
+
+  // ── Trait stat bonuses ─────────────────────────────────────────────────────
+  for (const trait of (character.traits || [])) {
+    const traitName = (trait.name || trait._name || '').trim();
+    const traitKey  = traitName.toLowerCase();
+    const effects   = TRAIT_EFFECTS[traitKey];
+    if (effects) {
+      // Use hardcoded table entry (takes priority over dynamic parser)
+      for (const fx of effects) {
+        if (fx.stat === '_info') continue;
+        if (!fx.value && !fx.conditional) continue; // skip truly empty entries
+        bonuses.push({
+          source: traitName, sourceType: 'trait', stat: fx.stat,
+          value: fx.value || 0,
+          displayValue: fx.displayValue,
+          label: fx.label,
+          conditional: fx.conditional || null,
+        });
+      }
+    } else {
+      // Dynamic parser: extract flat save / initiative / concentration bonuses from trait body text.
+      // Only runs when the trait is NOT in TRAIT_EFFECTS (avoids double-counting).
+      const traitText = getTraitBodyText(traitKey);
+      if (traitText) {
+        // Helper: extract the sentence containing a regex match
+        const _getSentence = (text, matchIndex, matchLen) => {
+          const start = text.lastIndexOf('.', matchIndex) + 1;
+          const end   = text.indexOf('.', matchIndex + matchLen);
+          return text.slice(start, end > 0 ? end : undefined).trim();
+        };
+        const _isConditionalSentence = (sentence) => _COND_RX.some(rx => rx.test(sentence));
+
+        // Save bonuses: "+N [type] bonus on/to [Fortitude|Reflex|Will] saves"
+        for (const sm of traitText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+(fortitude|reflex|will)\s+(?:saving\s+throws?|saves?)/gi)) {
+          const val = parseInt(sm[1]);
+          if (!val || val <= 0) continue;
+          const saveWord  = sm[2].toLowerCase();
+          const statKey   = saveWord === 'fortitude' ? 'fort_misc'
+                          : saveWord === 'reflex'    ? 'ref_misc'
+                          : 'will_misc';
+          const saveLabel = saveWord.charAt(0).toUpperCase() + saveWord.slice(1);
+          const sentence  = _getSentence(traitText, sm.index, sm[0].length);
+          if (_isConditionalSentence(sentence)) {
+            const afterMatch  = sentence.slice(sentence.indexOf(sm[0]) + sm[0].length).trim();
+            const condText    = afterMatch.replace(/^[.,;]\s*/, '').trim() || 'conditional';
+            const condStatKey = saveWord === 'fortitude' ? 'cond_fort'
+                              : saveWord === 'reflex'    ? 'cond_ref'
+                              : 'cond_will';
+            bonuses.push({ source: traitName, sourceType: 'trait', stat: condStatKey, value: 0,
+              displayValue: val, label: `+${val} ${saveLabel} (${condText})`, conditional: condText });
+          } else {
+            bonuses.push({ source: traitName, sourceType: 'trait', stat: statKey, value: val,
+              label: `+${val} ${saveLabel} (${traitName})` });
+          }
+        }
+        // Initiative bonuses: "+N [type] bonus on/to initiative"
+        for (const im of traitText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+initiative\b/gi)) {
+          const val = parseInt(im[1]);
+          if (!val || val <= 0) continue;
+          const sentence = _getSentence(traitText, im.index, im[0].length);
+          if (_isConditionalSentence(sentence)) {
+            const afterMatch = sentence.slice(sentence.indexOf(im[0]) + im[0].length).trim();
+            const condText   = afterMatch.replace(/^[.,;]\s*/, '').trim() || 'conditional';
+            bonuses.push({ source: traitName, sourceType: 'trait', stat: 'cond_init', value: 0,
+              displayValue: val, label: `+${val} Initiative (${condText})`, conditional: condText });
+          } else {
+            bonuses.push({ source: traitName, sourceType: 'trait', stat: 'init_misc', value: val,
+              label: `+${val} Initiative (${traitName})` });
+          }
+        }
+        // AC bonuses: "+N [dodge|deflection|...] bonus to AC"
+        for (const am of traitText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+to\s+(?:your\s+)?(?:armor\s+class|AC)\b/gi)) {
+          const val = parseInt(am[1]);
+          if (!val || val <= 0) continue;
+          const sentence = _getSentence(traitText, am.index, am[0].length);
+          if (_isConditionalSentence(sentence)) {
+            const afterMatch = sentence.slice(sentence.indexOf(am[0]) + am[0].length).trim();
+            const condText   = afterMatch.replace(/^[.,;]\s*/, '').trim() || 'conditional';
+            bonuses.push({ source: traitName, sourceType: 'trait', stat: 'cond_ac', value: 0,
+              displayValue: val, label: `+${val} AC (${condText})`, conditional: condText });
+          } else {
+            bonuses.push({ source: traitName, sourceType: 'trait', stat: 'ac_misc', value: val,
+              label: `+${val} AC (${traitName})` });
+          }
+        }
+        // Concentration bonuses: "+N [type] bonus on/to concentration checks"
+        for (const cm of traitText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+concentration\b/gi)) {
+          const val = parseInt(cm[1]);
+          if (!val || val <= 0) continue;
+          bonuses.push({ source: traitName, sourceType: 'trait', stat: 'conc_misc', value: val,
+            label: `+${val} Concentration (${traitName})` });
+        }
+      }
+    }
+  }
+
+  // ── Magic item stat bonuses ────────────────────────────────────────────────
+  for (const itemName of Object.keys(character.equipped || {})) {
+    const nameL = itemName.toLowerCase();
+    for (const pat of MAGIC_ITEM_STAT_PATTERNS) {
+      const m = nameL.match(pat.rx);
+      if (!m) continue;
+      const val = pat.fixedVal ?? parseInt(m[1]);
+      if (!val || val <= 0) continue;
+      for (const statKey of pat.stats) {
+        const lbl = `+${val} ${_STAT_PILL_LABEL[statKey] ?? statKey} (${itemName})`;
+        bonuses.push({ source: itemName, sourceType: 'item', stat: statKey, value: val, label: lbl });
+      }
+    }
+  }
+
   character.statBonuses = bonuses;
 }
 
@@ -525,6 +905,77 @@ const SIZE_MOD_FLY = {
   'Fine':8, 'Diminutive':6, 'Tiny':4, 'Small':2, 'Medium':0,
   'Large':-2, 'Huge':-4, 'Gargantuan':-6, 'Colossal':-8
 };
+
+// ── PF1e Carrying Capacity table (STR score → [light, medium, heavy] in lbs) ──
+// For STR > 20, loads are multiplied: ×2 per 5 points above 20 (doubles every 5).
+const CARRY_CAPACITY = [
+  null,          // index 0 unused
+  [3,   6,  10], // STR 1
+  [6,  13,  20], // STR 2
+  [10, 20,  30], // STR 3
+  [13, 26,  40], // STR 4
+  [16, 33,  50], // STR 5
+  [20, 40,  60], // STR 6
+  [23, 46,  70], // STR 7
+  [26, 53,  80], // STR 8
+  [30, 60,  90], // STR 9
+  [33, 66, 100], // STR 10
+  [38, 76, 115], // STR 11
+  [43, 86, 130], // STR 12
+  [50,100, 150], // STR 13
+  [58,116, 175], // STR 14
+  [66,133, 200], // STR 15
+  [76,153, 230], // STR 16
+  [86,173, 260], // STR 17
+  [100,200,300], // STR 18
+  [116,233,350], // STR 19
+  [133,266,400], // STR 20
+];
+
+// Returns {light, medium, heavy} capacity thresholds in lbs for a given STR score.
+function getCarryingCapacity(str) {
+  const s = Math.max(1, Math.round(str || 10));
+  if (s <= 20) {
+    const row = CARRY_CAPACITY[s] || CARRY_CAPACITY[10];
+    return { light: row[0], medium: row[1], heavy: row[2] };
+  }
+  // For STR > 20: multiply STR-20 base by 4 per 10 points above 20.
+  // PF1e rule: for each 10 pts above 20, multiply by 4.
+  // Simplified: base STR 20 values scaled by (4 ^ floor((str-20)/10)) * (2 ^ (floor((str-21)%10/5)))
+  const tiers = Math.floor((s - 21) / 10) + 1;      // full 10-pt brackets above 20
+  const halfTier = Math.floor(((s - 21) % 10) / 5); // extra half-bracket
+  const mult = Math.pow(4, tiers) * Math.pow(2, halfTier);
+  const base = CARRY_CAPACITY[20];
+  return { light: Math.round(base[0]*mult), medium: Math.round(base[1]*mult), heavy: Math.round(base[2]*mult) };
+}
+
+// Parse weight from an item object or the global itemWeightMap. Returns lbs as a number, or 0.
+function getItemWeight(item) {
+  // Direct weight field (from fetchItemDetail)
+  if (typeof item.weight === 'number') return item.weight;
+  if (typeof item.weight === 'string') {
+    const w = parseFloat(item.weight.replace(/[^0-9.]/g,''));
+    if (!isNaN(w)) return w;
+  }
+  // Fall back to preloaded weight map
+  const k = ((item.name || item._name || '')).toLowerCase();
+  return itemWeightMap[k] ?? 0;
+}
+
+// Returns total weight (lbs) of all items in character.equipment.
+function calcTotalWeight() {
+  return (character.equipment || []).reduce((sum, item) => sum + getItemWeight(item), 0);
+}
+
+// Returns 'light' | 'medium' | 'heavy' based on total carried weight and STR score.
+function getEncumbrance() {
+  const str = (character.stats && character.stats.str) || 10;
+  const cap = getCarryingCapacity(str);
+  const total = calcTotalWeight();
+  if (total <= cap.light)  return { load: 'light',  total, cap };
+  if (total <= cap.medium) return { load: 'medium', total, cap };
+  return                       { load: 'heavy',  total, cap };
+}
 
 // ── Parse class progression table to extract BAB + base saves for a level ──
 function parseClassProgression(cls) {
@@ -559,7 +1010,22 @@ function parseClassProgression(cls) {
       colCursor += colspan;
     });
 
-    if (babIdx < 0 && fortIdx < 0) continue; // not a progression table
+    // Positional fallback: some classes (e.g. Swashbuckler) use generic column headers
+    // "Level | Bonus | Save | Save | Save | Special" — detect and map by position.
+    if (babIdx < 0 && fortIdx < 0) {
+      const texts = ths.map(m => m[1].replace(/<[^>]+>/g,'').trim().toLowerCase());
+      // Pattern: first col is level, then one "bonus" col, then three "save" cols
+      const bonusIdx = texts.findIndex(t => t === 'bonus' || t === 'attack bonus');
+      const saveIdxs = texts.reduce((acc, t, i) => { if (t === 'save') acc.push(i); return acc; }, []);
+      if (bonusIdx >= 0 && saveIdxs.length >= 3) {
+        babIdx  = bonusIdx;
+        fortIdx = saveIdxs[0];
+        refIdx  = saveIdxs[1];
+        willIdx = saveIdxs[2];
+      } else {
+        continue; // truly not a progression table
+      }
+    }
 
     // Parse data rows
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -700,35 +1166,40 @@ function renderBreakdownPanel(el, stat, baseVal) {
   });
 }
 const ARMOR_AC_TABLE = {
-  'padded':              {ac:1, max_dex:8,  type:'armor'},
-  'leather':             {ac:2, max_dex:6,  type:'armor'},
-  'studded leather':     {ac:3, max_dex:5,  type:'armor'},
-  'chain shirt':         {ac:4, max_dex:4,  type:'armor'},
-  'hide':                {ac:4, max_dex:4,  type:'armor'},
-  'scale mail':          {ac:5, max_dex:3,  type:'armor'},
-  'chainmail':           {ac:6, max_dex:2,  type:'armor'},
-  'breastplate':         {ac:6, max_dex:3,  type:'armor'},
-  'splint mail':         {ac:7, max_dex:0,  type:'armor'},
-  'banded mail':         {ac:7, max_dex:1,  type:'armor'},
-  'half-plate':          {ac:8, max_dex:0,  type:'armor'},
-  'full plate':          {ac:9, max_dex:1,  type:'armor'},
-  'buckler':             {ac:1, max_dex:99, type:'shield'},
-  'shield, light wooden':{ac:1, max_dex:99, type:'shield'},
-  'shield, light steel': {ac:1, max_dex:99, type:'shield'},
-  'shield, heavy wooden':{ac:2, max_dex:99, type:'shield'},
-  'shield, heavy steel': {ac:2, max_dex:99, type:'shield'},
-  'shield, tower':       {ac:4, max_dex:2,  type:'shield'},
-  'light wooden shield': {ac:1, max_dex:99, type:'shield'},
-  'light steel shield':  {ac:1, max_dex:99, type:'shield'},
-  'heavy wooden shield': {ac:2, max_dex:99, type:'shield'},
-  'heavy steel shield':  {ac:2, max_dex:99, type:'shield'},
-  'tower shield':        {ac:4, max_dex:2,  type:'shield'},
+  // Light armor                          ac  max_dex  acp  type
+  'padded':              {ac:1, max_dex:8,  acp: 0, type:'armor'},
+  'leather':             {ac:2, max_dex:6,  acp: 0, type:'armor'},
+  'studded leather':     {ac:3, max_dex:5,  acp: 0, type:'armor'},
+  'chain shirt':         {ac:4, max_dex:4,  acp: 0, type:'armor'},
+  // Medium armor
+  'hide':                {ac:4, max_dex:4,  acp:-3, type:'armor'},
+  'scale mail':          {ac:5, max_dex:3,  acp:-4, type:'armor'},
+  'chainmail':           {ac:6, max_dex:2,  acp:-5, type:'armor'},
+  'breastplate':         {ac:6, max_dex:3,  acp:-4, type:'armor'},
+  // Heavy armor
+  'splint mail':         {ac:7, max_dex:0,  acp:-7, type:'armor'},
+  'banded mail':         {ac:7, max_dex:1,  acp:-6, type:'armor'},
+  'half-plate':          {ac:8, max_dex:0,  acp:-7, type:'armor'},
+  'full plate':          {ac:9, max_dex:1,  acp:-6, type:'armor'},
+  // Shields
+  'buckler':             {ac:1, max_dex:99, acp:-1, type:'shield'},
+  'shield, light wooden':{ac:1, max_dex:99, acp:-1, type:'shield'},
+  'shield, light steel': {ac:1, max_dex:99, acp:-1, type:'shield'},
+  'shield, heavy wooden':{ac:2, max_dex:99, acp:-2, type:'shield'},
+  'shield, heavy steel': {ac:2, max_dex:99, acp:-2, type:'shield'},
+  'shield, tower':       {ac:4, max_dex:2,  acp:-10,type:'shield'},
+  'light wooden shield': {ac:1, max_dex:99, acp:-1, type:'shield'},
+  'light steel shield':  {ac:1, max_dex:99, acp:-1, type:'shield'},
+  'heavy wooden shield': {ac:2, max_dex:99, acp:-2, type:'shield'},
+  'heavy steel shield':  {ac:2, max_dex:99, acp:-2, type:'shield'},
+  'tower shield':        {ac:4, max_dex:2,  acp:-10,type:'shield'},
 };
 
 // Slots that are considered "equipable" — maps to what box they affect
 const EQUIP_SLOTS = {
   'armor':     'armor',
   'shield':    'shield',
+  'weapon':    'weapon',
   'ring':      'ring',
   'belt':      'belt',
   'body':      'body',
@@ -745,15 +1216,32 @@ const EQUIP_SLOTS = {
   'wrists':    'wrists',
 };
 
+// Parse numeric values from armorMiscMap string entries.
+// Handles "+4", "–2" (en-dash U+2013), "—" (em-dash), null, undefined.
+function parseArmorNum(str) {
+  if (str == null) return null;
+  const s = String(str).replace(/[\u2013\u2014\u2212]/g, '-').replace(/[^0-9.\-+]/g, '');
+  const v = parseFloat(s);
+  return isNaN(v) ? null : v;
+}
+
 // Determine if an item is equipable and what slot it occupies
 function getEquipSlot(item) {
   const name = (item.name || item._name || '').toLowerCase().trim();
   const subtype = (item.subtype || '').toLowerCase();
-  // Direct subtype match
+  // Direct subtype match (e.g. 'armor', 'shield', 'weapon', 'ring', etc.)
   if (EQUIP_SLOTS[subtype]) return EQUIP_SLOTS[subtype];
-  // Armor table match
+  // Hardcoded armor table match
   if (ARMOR_AC_TABLE[name]) return ARMOR_AC_TABLE[name].type;
-  // Name-based heuristics for non-magic armor
+  // DB-loaded armor map match (covers Armored Coat, Agile Breastplate, etc.)
+  const armorEntry = armorMiscMap[name];
+  if (armorEntry) {
+    const at = (armorEntry.armorType || '').toLowerCase();
+    return at.includes('shield') ? 'shield' : 'armor';
+  }
+  // DB-loaded weapon map match
+  if (weaponMiscMap[name]) return 'weapon';
+  // Name-based heuristics for non-magic armor (fallback)
   if (/\b(plate|mail|leather|padded|hide|breastplate|chainmail|splint|banded)\b/i.test(name)) return 'armor';
   if (/\bshield\b/i.test(name) && !/spike/i.test(name)) return 'shield';
   return null; // not equipable
@@ -762,11 +1250,24 @@ function getEquipSlot(item) {
 // Recompute ac_armor and ac_shield from equipped items
 function recalcEquippedAC() {
   let armorBonus = 0, shieldBonus = 0;
-  for (const [itemName, slot] of Object.entries(character.equipped)) {
-    const entry = ARMOR_AC_TABLE[itemName.toLowerCase()];
-    if (!entry) continue;
-    if (entry.type === 'armor')  armorBonus  = Math.max(armorBonus,  entry.ac);
-    if (entry.type === 'shield') shieldBonus = Math.max(shieldBonus, entry.ac);
+  for (const [itemName] of Object.entries(character.equipped)) {
+    const key = itemName.toLowerCase();
+    const entry = ARMOR_AC_TABLE[key];
+    if (entry) {
+      if (entry.type === 'armor')  armorBonus  = Math.max(armorBonus,  entry.ac);
+      if (entry.type === 'shield') shieldBonus = Math.max(shieldBonus, entry.ac);
+    } else {
+      // Fall back to DB-loaded armor map (Armored Coat, Agile Breastplate, etc.)
+      const ae = armorMiscMap[key];
+      if (ae) {
+        const ac = parseArmorNum(ae.armorBonus);
+        if (ac !== null) {
+          const at = (ae.armorType || '').toLowerCase();
+          if (at.includes('shield')) shieldBonus = Math.max(shieldBonus, ac);
+          else armorBonus = Math.max(armorBonus, ac);
+        }
+      }
+    }
   }
   character.stats.ac_armor  = armorBonus;
   character.stats.ac_shield = shieldBonus;
@@ -780,9 +1281,49 @@ function recalcEquippedAC() {
   if (armorBd) { const inp = armorBd.querySelector('input[type="number"]'); if (inp) inp.value = armorBonus; }
   const shieldBd = document.getElementById('stat-breakdown-ac_shield');
   if (shieldBd) { const inp = shieldBd.querySelector('input[type="number"]'); if (inp) inp.value = shieldBonus; }
-  // Trigger derived refresh
+  // Recompute stat bonuses (Weapon Focus equipped-check depends on character.equipped)
+  recomputeStatBonuses();
+  // Trigger derived refresh (updates all display values + open breakdown pills)
   if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
 }
+
+// Returns the Fighter Armor Training bonus value (0–4) based on Fighter level.
+// Brawler does not have Armor Training; only Fighter is checked here.
+function getArmorTrainingBonus() {
+  const fc = (character.classes || []).find(c => (c.name || c._name || '').toLowerCase() === 'fighter');
+  if (!fc) return 0;
+  const lv = parseInt(fc.level) || 0;
+  return lv < 3 ? 0 : lv < 7 ? 1 : lv < 11 ? 2 : lv < 15 ? 3 : 4;
+}
+
+// Sum armor check penalties from all equipped items (armor + shield both penalize, they stack).
+// Fighter Armor Training reduces the total ACP by 1–4. Encumbrance adds further penalty.
+// Returns a negative number or 0.
+function getEquippedACP() {
+  let total = 0;
+  for (const [itemName] of Object.entries(character.equipped || {})) {
+    const key = itemName.toLowerCase();
+    const entry = ARMOR_AC_TABLE[key];
+    if (entry && typeof entry.acp === 'number') {
+      total += entry.acp;
+    } else {
+      // Fall back to DB-loaded armor map
+      const ae = armorMiscMap[key];
+      if (ae) {
+        const acp = parseArmorNum(ae.checkPenalty);
+        if (acp !== null) total += acp;
+      }
+    }
+  }
+  // Armor Training reduces ACP (makes it less negative), but can't make it positive
+  total = Math.min(0, total + getArmorTrainingBonus());
+  // Encumbrance stacks with armor ACP (medium: −3, heavy: −6)
+  const enc = getEncumbrance();
+  if (enc.load === 'medium') total = Math.min(0, total - 3);
+  else if (enc.load === 'heavy') total = Math.min(0, total - 6);
+  return total;
+}
+
 let dataCache = { races:[], classes:[], feats:[], traits:[], equipment:[], spells:[], deities:[] };
 let filteredData = {};
 let featShowSummary = true; // true = show summary, false = show benefit
@@ -803,7 +1344,23 @@ let charSpellShowFull    = false;  // persists the "Full Desc" checkbox state on
 // ICONS / COLORS
 // ═══════════════════════════════════════════════════════════════════════════
 const CATEGORY_ICONS = { race:'👤', class:'⚔️', feat:'📜', trait:'✨', equipment:'🛡️', spell:'🔮', deity:'⛪', weapon:'⚔️', armor:'🛡️', potion:'🧪', ring:'💍', scroll:'📜', wand:'🪄', staff:'🔱' };
-const SPELLCASTER_CLASSES = new Set(['bard','cleric','druid','paladin','ranger','sorcerer','wizard','alchemist','inquisitor','oracle','summoner','witch','magus','arcanist','bloodrager','hunter','investigator','shaman','skald','warpriest','arcane archer','arcane trickster','dragon disciple','eldritch knight','loremaster','mystic theurge','pathfinder chronicler','holy vindicator','nature warden','rage prophet']);
+// SPELLCASTER_CLASSES — gates the "Spellcaster Only" filter and spells-tab visibility checks.
+// Includes base classes, ACG hybrids, and prestige spellcasters.
+// antipaladin is listed in SPELL_CLASSES (spell browser) but has subtype='npc' in the DB,
+// so it is included here so the filter works if it ever appears as a character class.
+const SPELLCASTER_CLASSES = new Set([
+  // Core / APG / UC / UM base classes
+  'bard','cleric','druid','paladin','ranger','sorcerer','wizard',
+  'alchemist','inquisitor','oracle','summoner','witch','magus',
+  // ACG hybrid spellcasters
+  'arcanist','bloodrager','hunter','investigator','shaman','skald','warpriest',
+  // Antipaladin (subtype='npc' in DB; spell browser card exists via SPELL_CLASSES)
+  'antipaladin',
+  // Prestige spellcasters (inherit spells; no standalone spell list in DB)
+  'arcane archer','arcane trickster','dragon disciple','eldritch knight',
+  'loremaster','mystic theurge','pathfinder chronicler',
+  'holy vindicator','nature warden','rage prophet',
+]);
 const CLASS_ICONS = { barbarian:'🪓', bard:'🎵', cleric:'✝️', druid:'🌿', fighter:'⚔️', monk:'👊', paladin:'🛡️', ranger:'🏹', rogue:'🗡️', sorcerer:'🔥', wizard:'📚', alchemist:'⚗️', cavalier:'🐴', inquisitor:'⚖️', oracle:'🔮', summoner:'🌀', witch:'🧿', gunslinger:'🔫', ninja:'🌑', samurai:'🏯', magus:'✨', arcanist:'📖', bloodrager:'💢', brawler:'👊', hunter:'🏹', investigator:'🔍', shaman:'🌀', skald:'🎶', slayer:'🗡️', swashbuckler:'🤺', warpriest:'✝️', 'arcane archer':'🏹', 'arcane trickster':'🃏', assassin:'🩸', 'dragon disciple':'🐉', duelist:'🤺', 'eldritch knight':'🔱', loremaster:'📜', 'mystic theurge':'☯️', 'pathfinder chronicler':'🗺️', shadowdancer:'🌒', 'battle herald':'📯', 'holy vindicator':'⚔️', 'horizon walker':'🧭', 'master chymist':'🧪', 'master spy':'🕵️', 'nature warden':'🦉', 'rage prophet':'😤', 'stalwart defender':'🏰' };
 const MARTIAL_COLOR='#c44a2a', ARCANE_COLOR='#6e7fd4', DIVINE_COLOR='#c4a020', PRESTIGE_COLOR='#7a3a9a';
 const CLASS_COLORS = { barbarian:MARTIAL_COLOR, cavalier:MARTIAL_COLOR, fighter:MARTIAL_COLOR, gunslinger:MARTIAL_COLOR, ninja:MARTIAL_COLOR, rogue:MARTIAL_COLOR, samurai:MARTIAL_COLOR, monk:MARTIAL_COLOR, brawler:MARTIAL_COLOR, slayer:MARTIAL_COLOR, swashbuckler:MARTIAL_COLOR, bloodrager:MARTIAL_COLOR, wizard:ARCANE_COLOR, sorcerer:ARCANE_COLOR, bard:ARCANE_COLOR, witch:ARCANE_COLOR, summoner:ARCANE_COLOR, alchemist:ARCANE_COLOR, magus:ARCANE_COLOR, arcanist:ARCANE_COLOR, investigator:ARCANE_COLOR, cleric:DIVINE_COLOR, druid:DIVINE_COLOR, paladin:DIVINE_COLOR, ranger:DIVINE_COLOR, oracle:DIVINE_COLOR, inquisitor:DIVINE_COLOR, hunter:DIVINE_COLOR, shaman:DIVINE_COLOR, warpriest:DIVINE_COLOR, skald:DIVINE_COLOR };
@@ -1160,7 +1717,15 @@ function loadFeats()   {
   return idxQuery(`SELECT * FROM central_index WHERE type='feat' AND database IN (${dbListSql()}) ORDER BY name`).map(mapIndexRow);
 }
 function loadTraits()  {
-  return idxQuery(`SELECT * FROM central_index WHERE type='trait' AND database IN (${dbListSql()}) ORDER BY name`).map(mapIndexRow);
+  const rows = idxQuery(`SELECT * FROM central_index WHERE type='trait' AND database IN (${dbListSql()}) ORDER BY name`).map(mapIndexRow);
+  // Deduplicate by name — the index can contain the same trait from multiple book DBs
+  const seen = new Set();
+  return rows.filter(t => {
+    const key = (t.name || t._name || '').toLowerCase().trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 function loadItems()   {
   return idxQuery(`SELECT * FROM central_index WHERE type='item' AND database IN (${dbListSql()}) ORDER BY name`).map(mapIndexRow);
@@ -2079,6 +2644,7 @@ let itemPriceMap  = {}; // lowercase name → price string
 let itemSlotMap   = {}; // lowercase name → slot (magic items)
 let itemAuraMap   = {}; // lowercase name → aura
 let itemClMap     = {}; // lowercase name → caster level
+let itemWeightMap = {}; // lowercase name → weight in lbs (number)
 
 async function buildWeaponArmorMaps() {
   for (const dbFile of DB_FILES) {
@@ -2152,7 +2718,7 @@ async function buildWeaponArmorMaps() {
     // Item body text, price, slot, aura, CL for all items
     try {
       const irows = await bookQuery(dbFile, `
-        SELECT s.name, s.body, d.price, d.slot, d.aura, d.cl
+        SELECT s.name, s.body, d.price, d.slot, d.aura, d.cl, d.weight
         FROM sections s
         LEFT JOIN item_details d ON s.section_id=d.section_id
         WHERE s.type='item'`);
@@ -2166,6 +2732,10 @@ async function buildWeaponArmorMaps() {
         if (!itemSlotMap[k] && r.slot && r.slot !== 'none' && r.slot !== '&mdash;') itemSlotMap[k] = r.slot.replace(/\b\w/g, l=>l.toUpperCase());
         if (!itemAuraMap[k] && r.aura)  itemAuraMap[k] = r.aura;
         if (!itemClMap[k]   && r.cl)    itemClMap[k]   = r.cl;
+        if (itemWeightMap[k] === undefined && r.weight) {
+          const wNum = parseFloat(String(r.weight).replace(/[^0-9.]/g,''));
+          if (!isNaN(wNum)) itemWeightMap[k] = wNum;
+        }
       }
     } catch(e) { console.warn('buildWeaponArmorMaps items:', dbFile, e.message); }
 
@@ -5027,6 +5597,7 @@ async function buildClassRoleMap() {
 
 // Pre-load body text for traits from book DBs — used on trait cards
 let traitBodyMap = {}; // lowercase name → benefit/body text
+let _cachedSkillBonuses = null; // set by getSkillBonuses(), cleared by recomputeStatBonuses()
 
 async function buildTraitBodyMap() {
   for (const dbFile of DB_FILES) {
@@ -5044,6 +5615,183 @@ async function buildTraitBodyMap() {
       }
     } catch(e) {}
   }
+}
+
+// Helper: return cleaned body text for a trait from traitBodyMap (used by dynamic stat parser)
+function getTraitBodyText(traitKey) {
+  return traitBodyMap[traitKey] || null;
+}
+
+// ── Generate tag HTML for a trait card on the browse/traits page ──────────────
+// Returns an HTML string of colored pill tags summarising what the trait does,
+// or '' if no tags can be determined.
+// chosenSkill: if provided (character page, choice already made), skip the
+//              "Choose Class Skill: …" and "+N to that skill" tags — the chosen
+//              skill is already displayed as the teal pill at the bottom of the card.
+function generateTraitBrowseTags(name, item, chosenSkill) {
+  const nameKey  = (name || '').toLowerCase().trim();
+  const rawBody  = traitBodyMap[nameKey] || item.description || item.benefit || '';
+  const bodyText = rawBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+  const tags = [];
+
+  // Helper: create a styled pill span
+  const mkTag = (text, bg, bdr, col) =>
+    `<span style="font-size:0.62rem;font-family:Cinzel,serif;padding:0.1rem 0.38rem;` +
+    `border-radius:3px;background:${bg};border:1px solid ${bdr};color:${col};white-space:nowrap;">` +
+    `${escapeHtml(text)}</span>`;
+
+  // 1. Known stat bonuses from TRAIT_EFFECTS (hardcoded, always reliable)
+  const effects = TRAIT_EFFECTS[nameKey];
+  if (effects && effects.length) {
+    const seen = new Set();
+    for (const fx of effects) {
+      if (fx.stat === '_info') continue;
+      // Strip trailing "(TraitName)" — redundant when the tag is already on that trait's card
+      const label = (fx.label || '').replace(/\s*\([^)]+\)\s*$/, '').trim();
+      if (!label || seen.has(label)) continue;
+      seen.add(label);
+      if (fx.conditional) {
+        // Conditional bonus — amber tag
+        tags.push(mkTag(label, 'rgba(220,170,60,0.1)', 'rgba(220,170,60,0.3)', '#d4a840'));
+      } else {
+        // Flat unconditional bonus — green tag
+        tags.push(mkTag(label, 'rgba(100,200,120,0.12)', 'rgba(100,200,120,0.3)', '#80c890'));
+      }
+    }
+  } else if (bodyText) {
+    // Dynamic stat-bonus parsing for traits NOT in TRAIT_EFFECTS
+    // Conditional-language detection (mirrors logic in recomputeStatBonuses)
+    const _condRxBrowse = [
+      /\b(?:as\s+long\s+as|while|when(?:ever)?|only\s+(?:if|when)|against|vs\.?|during|if\s+you)\b/i,
+      /\b(?:for\s+\d+\s+(?:round|minute|hour))/i,
+      /\b(?:once\s+per\s+day)\b/i,
+      /\b(?:within\s+\d+\s+(?:feet|ft))\b/i,
+    ];
+    const _getSentenceBrowse = (text, idx, len) => {
+      const s = text.lastIndexOf('.', idx) + 1;
+      const e = text.indexOf('.', idx + len);
+      return text.slice(s, e > 0 ? e : undefined).trim();
+    };
+    const _isCondBrowse = (sent) => _condRxBrowse.some(rx => rx.test(sent));
+
+    const seen = new Set();
+    for (const m of bodyText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+(fortitude|reflex|will)\s+(?:saving\s+throws?|saves?)/gi)) {
+      const saveWord = m[2][0].toUpperCase() + m[2].slice(1).toLowerCase();
+      const sentence = _getSentenceBrowse(bodyText, m.index, m[0].length);
+      const label    = `+${parseInt(m[1])} ${saveWord}`;
+      if (seen.has(label)) continue; seen.add(label);
+      if (_isCondBrowse(sentence)) {
+        tags.push(mkTag(`${label} (conditional)`, 'rgba(220,170,60,0.1)', 'rgba(220,170,60,0.3)', '#d4a840'));
+      } else {
+        tags.push(mkTag(label, 'rgba(100,200,120,0.12)', 'rgba(100,200,120,0.3)', '#80c890'));
+      }
+    }
+    for (const m of bodyText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+initiative\b/gi)) {
+      const label    = `+${parseInt(m[1])} Initiative`;
+      const sentence = _getSentenceBrowse(bodyText, m.index, m[0].length);
+      if (seen.has(label)) continue; seen.add(label);
+      if (_isCondBrowse(sentence)) {
+        tags.push(mkTag(`${label} (conditional)`, 'rgba(220,170,60,0.1)', 'rgba(220,170,60,0.3)', '#d4a840'));
+      } else {
+        tags.push(mkTag(label, 'rgba(100,200,120,0.12)', 'rgba(100,200,120,0.3)', '#80c890'));
+      }
+    }
+    for (const m of bodyText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+to\s+(?:your\s+)?(?:armor\s+class|AC)\b/gi)) {
+      const label    = `+${parseInt(m[1])} AC`;
+      const sentence = _getSentenceBrowse(bodyText, m.index, m[0].length);
+      if (seen.has(label)) continue; seen.add(label);
+      if (_isCondBrowse(sentence)) {
+        tags.push(mkTag(`${label} (conditional)`, 'rgba(220,170,60,0.1)', 'rgba(220,170,60,0.3)', '#d4a840'));
+      } else {
+        tags.push(mkTag(label, 'rgba(100,200,120,0.12)', 'rgba(100,200,120,0.3)', '#80c890'));
+      }
+    }
+    for (const m of bodyText.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+concentration\b/gi)) {
+      const label = `+${parseInt(m[1])} Concentration`;
+      if (!seen.has(label)) { seen.add(label); tags.push(mkTag(label, 'rgba(100,200,120,0.12)', 'rgba(100,200,120,0.3)', '#80c890')); }
+    }
+  }
+
+  // 1b. Informational (non-stat) tags from TRAIT_INFO_TAGS (purple)
+  const infoTags = TRAIT_INFO_TAGS[nameKey];
+  if (infoTags && infoTags.length) {
+    for (const tagText of infoTags) {
+      if (tagText) tags.push(mkTag(tagText, 'rgba(160,120,200,0.1)', 'rgba(160,120,200,0.3)', '#b090d0'));
+    }
+  }
+
+  // 1c. Ability-score substitution tags (purple info)
+  const abilOverride = TRAIT_ABILITY_OVERRIDES[nameKey];
+  if (abilOverride) {
+    tags.push(mkTag(`★ Uses ${abilOverride.ability.toUpperCase()} for ${abilOverride.skill}`,
+      'rgba(160,120,200,0.1)', 'rgba(160,120,200,0.3)', '#b090d0'));
+  }
+
+  if (bodyText) {
+    // 2. Choice-based skill traits (e.g. Vagabond Child — "select one of the following skills")
+    const choiceInfo = parseTraitSkillChoice(bodyText);
+    if (choiceInfo && choiceInfo.options && choiceInfo.options.length >= 2) {
+      // Only show the "Choose…" / "+N to that skill" prompt tags when no choice has been
+      // made yet. Once a skill is chosen, the teal pill at the bottom of the card already
+      // shows the selection — repeating the prompt above is redundant.
+      if (!chosenSkill) {
+        const choiceLabel = choiceInfo.classSkill
+          ? `Choose Class Skill: (${choiceInfo.options.join(', ')})`
+          : `Choose Skill: (${choiceInfo.options.join(', ')})`;
+        tags.push(mkTag(choiceLabel, 'rgba(60,190,180,0.12)', 'rgba(60,190,180,0.35)', '#5adcd0'));
+        if (choiceInfo.bonus > 0) {
+          tags.push(mkTag(`+${choiceInfo.bonus} to that skill`, 'rgba(100,150,220,0.12)', 'rgba(100,150,220,0.3)', '#8ab0da'));
+        }
+      }
+    } else {
+      // 3. Fixed class skill grant (non-choice) — e.g. "X is always a class skill for you"
+      if (/is\s+(?:always\s+)?a\s+class\s+skill\s+for\s+you/i.test(bodyText)) {
+        const skillNames = PF1E_SKILLS.map(s => s.name);
+        const foundSkills = skillNames.filter(sk =>
+          new RegExp('\\b' + sk.replace(/[()/]/g, '\\$&') + '\\b', 'i').test(bodyText)
+        );
+        if (foundSkills.length > 0) {
+          for (const sk of foundSkills) {
+            tags.push(mkTag(`Class Skill: ${sk}`, 'rgba(60,190,180,0.12)', 'rgba(60,190,180,0.35)', '#5adcd0'));
+          }
+        } else {
+          tags.push(mkTag('Class Skill', 'rgba(60,190,180,0.12)', 'rgba(60,190,180,0.35)', '#5adcd0'));
+        }
+      }
+
+      // 4. Fixed or conditional skill bonuses (trait or racial bonus to a named skill)
+      const skillNames = PF1E_SKILLS.map(s => s.name);
+      const skillSeen  = new Set();
+      for (const m of bodyText.matchAll(/\+(\d+)\s+(?:racial\s+|trait\s+)?bonus\s+(?:on|to)\s+([^.,;]+)/gi)) {
+        const val       = parseInt(m[1]);
+        const rawPhrase = m[2] || '';
+        for (const sk of skillNames) {
+          const skRx    = new RegExp('\\b' + sk.replace(/[()/]/g, '\\$&') + '\\b', 'i');
+          const skMatch = skRx.exec(rawPhrase);
+          if (skMatch) {
+            const key = `${sk}+${val}`;
+            if (!skillSeen.has(key)) {
+              skillSeen.add(key);
+              // Any text remaining after "SkillName [checks]" signals a conditional bonus
+              const tail = rawPhrase.slice(skMatch.index + sk.length)
+                .replace(/^\s*checks?\b\s*/i, '').trim();
+              const isConditional = tail.length > 3;
+              if (isConditional) {
+                // Amber — matches the character page's conditional pill colour
+                tags.push(mkTag(`↑ ${sk} +${val} (conditional)`, 'rgba(220,170,60,0.1)', 'rgba(220,170,60,0.3)', '#d4a840'));
+              } else {
+                tags.push(mkTag(`↑ ${sk} +${val}`, 'rgba(100,150,220,0.12)', 'rgba(100,150,220,0.3)', '#8ab0da'));
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (tags.length === 0) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:0.3rem;padding:0.5rem 1.25rem 0;margin-bottom:0.5rem;">${tags.join('')}</div>`;
 }
 
 let featBodyMap = {};    // lowercase name → summary/description text for card
@@ -5353,7 +6101,9 @@ function renderEquipmentMisc(item) {
 }
 
 // Create card element
-function createCard(category, item) {
+// opts.suppressBrowseTags — pass true from the character page so browse-style trait
+//   tags aren't shown (the character page renders its own pill system below each card).
+function createCard(category, item, opts = {}) {
   const card = document.createElement('div');
   card.className = 'class-card';
   
@@ -5551,6 +6301,15 @@ function createCard(category, item) {
       descHtml = boldKeyTerms(bodyText);
     }
 
+    // Trait browse-page tags (stat bonuses, skill bonuses, class skills)
+    // Browse-page tags — suppressed on the character page (which renders its own pill system).
+    const _traitChosenSkill = category === 'traits'
+      ? ((character.traitSkillChoices || {})[name] || null)
+      : null;
+    const traitBrowseTags = (category === 'traits' && !opts.suppressBrowseTags)
+      ? generateTraitBrowseTags(name, item, _traitChosenSkill)
+      : '';
+
     card.innerHTML = `
       <div style="margin:-1.5rem -1.5rem 1.25rem;padding:0.85rem 1.25rem;background:${typeColor}22;border-bottom:2px solid ${typeColor};border-radius:7px 7px 0 0;display:flex;align-items:center;gap:0.75rem;">
         <span style="font-size:1.8rem;line-height:1;">${typeIcon}</span>
@@ -5560,6 +6319,7 @@ function createCard(category, item) {
         </div>
         <button class="card-btn" style="flex-shrink:0;margin-left:0.5rem;" onclick="event.stopPropagation();toggleItem('${category}', '${escapeQuotes(name)}')">${addText}</button>
       </div>
+      ${traitBrowseTags}
       <div class="card-body">
         ${prereqBlock}
         <div class="card-desc">${descHtml}</div>
@@ -5864,17 +6624,50 @@ function toggleItem(category, name) {
   } else if (category === 'feats') {
     if (character.feats.some(f => f.name === name)) {
       character.feats = character.feats.filter(f => f.name !== name);
+      // Clean up any stored choice for this feat
+      if (character.featChoices) delete character.featChoices[name];
       showToast(`${name} removed`);
     } else {
       character.feats.push(item);
       showToast(`${name} added`);
+      // If this feat requires a player choice (skill/weapon/school) and no choice is stored yet, show picker
+      const _featChoiceType = parseFeatChoiceType(name);
+      if (_featChoiceType && !((character.featChoices || {})[name])) {
+        showFeatChoiceModal(name, _featChoiceType, (chosen) => {
+          if (!character.featChoices) character.featChoices = {};
+          character.featChoices[name] = chosen;
+          recomputeStatBonuses();
+          renderCharacter();
+        });
+      }
     }
   } else if (category === 'traits') {
     // Traits that grant starting gold (e.g. Rich Parents: +900 gp)
     const TRAIT_GOLD_GRANTS = { 'rich parents': 900 };
     const traitGold = TRAIT_GOLD_GRANTS[(name || '').toLowerCase().trim()] || 0;
+    const traitKey  = (name || '').toLowerCase().trim();
     if (character.traits.some(t => t.name === name)) {
       character.traits = character.traits.filter(t => t.name !== name);
+      // Clean up any stored skill choice for this trait
+      if (character.traitSkillChoices) delete character.traitSkillChoices[name];
+      // Remove any ability score override this trait applied
+      const _rmOverride = TRAIT_ABILITY_OVERRIDES[traitKey];
+      if (_rmOverride && character.skillAbilityOverrides) {
+        delete character.skillAbilityOverrides[_rmOverride.skill];
+      }
+      // For Wisdom in the Flesh: remove the override for the chosen skill
+      if (traitKey === 'wisdom in the flesh' && character.traitSkillChoices) {
+        const _wisChosen = character.traitSkillChoices[name];
+        if (_wisChosen && character.skillAbilityOverrides) {
+          delete character.skillAbilityOverrides[_wisChosen];
+        }
+      }
+      // For Adopted: clear stored race/trait selection and remove the adopted racial trait
+      if (traitKey === 'adopted') {
+        delete character.adoptedRace;
+        delete character.adoptedRacialTrait;
+        character.traits = character.traits.filter(t => !t._fromAdopted);
+      }
       if (traitGold > 0) {
         // Subtract the gold grant (don't go below 0)
         if (!character.currency) character.currency = { gp:0, sp:0, cp:0 };
@@ -5886,11 +6679,52 @@ function toggleItem(category, name) {
       }
     } else {
       character.traits.push(item);
+      // Apply any ability score override this trait grants
+      const _addOverride = TRAIT_ABILITY_OVERRIDES[traitKey];
+      if (_addOverride) {
+        if (!character.skillAbilityOverrides) character.skillAbilityOverrides = {};
+        character.skillAbilityOverrides[_addOverride.skill] = _addOverride.ability;
+      }
       if (traitGold > 0) {
         addGold(traitGold);
         showToast(`${name} added · +${traitGold} gp`);
       } else {
         showToast(`${name} added`);
+      }
+
+      // Special: Adopted trait — show two-step race + racial trait picker
+      if (traitKey === 'adopted') {
+        showAdoptedRacePickerModal((chosenRace, chosenRacialTrait, traitObject) => {
+          character.adoptedRace = chosenRace;
+          character.adoptedRacialTrait = chosenRacialTrait;
+          // Note the adopted racial trait name in traitSkillChoices so it shows on the card
+          if (!character.traitSkillChoices) character.traitSkillChoices = {};
+          character.traitSkillChoices[name] = `${chosenRacialTrait} (${chosenRace})`;
+          // Push the adopted racial trait into character.traits so it appears in the traits list
+          if (traitObject && !character.traits.some(t => (t.name || t._name) === (traitObject.name || traitObject._name) && t._fromAdopted)) {
+            character.traits.push({ ...traitObject, _fromAdopted: true });
+          }
+          recomputeStatBonuses();
+          renderCharacter();
+          showToast(`Adopted: ${chosenRacialTrait} from ${chosenRace}`);
+        });
+      } else {
+        // If this trait requires a skill choice and none is stored yet, show the picker
+        // 8a fix: index description is NULL — also check traitBodyMap for choice patterns
+        const _choiceInfo = parseTraitSkillChoice(item.description || item.benefit || traitBodyMap[(name || '').toLowerCase()] || '');
+        if (_choiceInfo && !((character.traitSkillChoices || {})[name])) {
+          showTraitSkillChoiceModal(name, _choiceInfo, (chosenSkill) => {
+            if (!character.traitSkillChoices) character.traitSkillChoices = {};
+            character.traitSkillChoices[name] = chosenSkill;
+            // For Wisdom in the Flesh, apply WIS override to chosen skill
+            if (traitKey === 'wisdom in the flesh') {
+              if (!character.skillAbilityOverrides) character.skillAbilityOverrides = {};
+              character.skillAbilityOverrides[chosenSkill] = 'wis';
+            }
+            recomputeStatBonuses();
+            renderCharacter();
+          });
+        }
       }
     }
   } else if (category === 'equipment') {
@@ -7860,12 +8694,24 @@ const PF1E_SKILLS = [
 
 // Base skill ranks per level (before Int modifier) per class
 const CLASS_SKILL_RANKS_PER_LEVEL = {
+  // Core / APG / UC / UM classes
   alchemist:4, arcanist:2, bard:6, barbarian:4, bloodrager:4,
   cavalier:4,  cleric:2,   druid:4, fighter:2,  gunslinger:4,
   inquisitor:6, investigator:6, magus:2, monk:4, ninja:8,
   oracle:4, paladin:2, ranger:6, rogue:8, samurai:4,
   shaman:4, slayer:6, sorcerer:2, summoner:2, warpriest:2,
   witch:2, wizard:2,
+  // ACG hybrid classes (were missing)
+  brawler:4, hunter:6, skald:4, swashbuckler:4,
+  // Occult Adventures classes (partially wired; no DB loaded yet)
+  kineticist:4, medium:4, mesmerist:6, occultist:4, psychic:2, spiritualist:4, vigilante:6,
+  // CRB Prestige classes
+  'arcane archer':4, 'arcane trickster':4, assassin:4, 'dragon disciple':2,
+  duelist:4, 'eldritch knight':2, loremaster:4, 'mystic theurge':2,
+  'pathfinder chronicler':8, shadowdancer:6,
+  // APG Prestige classes
+  'battle herald':4, 'holy vindicator':2, 'horizon walker':6, 'master chymist':2,
+  'master spy':6, 'nature warden':4, 'rage prophet':4, 'stalwart defender':2,
 };
 
 // Base class skill lists per class
@@ -7902,6 +8748,49 @@ const CLASS_BASE_SKILLS = {
   hunter:       new Set(['Climb','Craft','Handle Animal','Heal','Intimidate','Knowledge (Dungeoneering)','Knowledge (Geography)','Knowledge (Nature)','Perception','Profession','Ride','Spellcraft','Stealth','Survival','Swim']),
   skald:        new Set(['Acrobatics','Appraise','Bluff','Climb','Craft','Diplomacy','Disable Device','Disguise','Escape Artist','Fly','Handle Animal','Heal','Intimidate','Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Engineering)','Knowledge (Geography)','Knowledge (History)','Knowledge (Local)','Knowledge (Nature)','Knowledge (Nobility)','Knowledge (Planes)','Knowledge (Religion)','Linguistics','Perception','Perform','Profession','Ride','Sense Motive','Sleight of Hand','Spellcraft','Stealth','Survival','Swim','Use Magic Device']),
   swashbuckler: new Set(['Acrobatics','Bluff','Climb','Craft','Diplomacy','Escape Artist','Intimidate','Knowledge (Local)','Knowledge (Nobility)','Perception','Perform','Profession','Ride','Sense Motive','Sleight of Hand','Swim']),
+  // Occult Adventures classes (no DB loaded yet but class skills defined here)
+  kineticist:   new Set(['Acrobatics','Craft','Heal','Intimidate','Perception','Profession','Stealth','Use Magic Device']),
+  medium:       new Set(['Bluff','Craft','Diplomacy','Handle Animal','Knowledge (Arcana)','Knowledge (Planes)','Knowledge (Religion)','Linguistics','Perception','Perform','Profession','Ride','Sense Motive','Spellcraft','Use Magic Device']),
+  mesmerist:    new Set(['Bluff','Craft','Diplomacy','Disguise','Escape Artist','Intimidate','Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Planes)','Knowledge (Religion)','Perception','Perform','Profession','Sense Motive','Sleight of Hand','Spellcraft','Stealth','Use Magic Device']),
+  occultist:    new Set(['Appraise','Craft','Diplomacy','Disable Device','Fly','Knowledge (Arcana)','Knowledge (Engineering)','Knowledge (Planes)','Knowledge (Religion)','Linguistics','Perception','Profession','Sense Motive','Spellcraft','Use Magic Device']),
+  psychic:      new Set(['Bluff','Craft','Diplomacy','Fly','Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (History)','Knowledge (Planes)','Linguistics','Profession','Sense Motive','Spellcraft']),
+  spiritualist: new Set(['Bluff','Craft','Fly','Heal','Intimidate','Knowledge (Arcana)','Knowledge (Planes)','Knowledge (Religion)','Profession','Sense Motive','Spellcraft','Use Magic Device']),
+  vigilante:    new Set(['Bluff','Craft','Diplomacy','Disguise','Escape Artist','Intimidate','Linguistics','Perception','Perform','Profession','Sense Motive','Sleight of Hand','Stealth','Use Magic Device']),
+  // ── CRB Prestige classes ─────────────────────────────────────────────────
+  'arcane archer':       new Set(['Perception','Ride','Stealth','Survival']),
+  'arcane trickster':    new Set(['Acrobatics','Appraise','Bluff','Climb','Diplomacy','Disable Device','Disguise','Escape Artist',
+    'Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Engineering)','Knowledge (Geography)',
+    'Knowledge (History)','Knowledge (Local)','Knowledge (Nature)','Knowledge (Nobility)','Knowledge (Planes)','Knowledge (Religion)',
+    'Perception','Sense Motive','Sleight of Hand','Spellcraft','Stealth','Swim']),
+  assassin:              new Set(['Acrobatics','Bluff','Climb','Diplomacy','Disable Device','Disguise','Escape Artist','Intimidate','Linguistics','Perception','Sense Motive','Sleight of Hand','Stealth','Swim','Use Magic Device']),
+  'dragon disciple':     new Set(['Diplomacy','Escape Artist','Fly',
+    'Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Engineering)','Knowledge (Geography)',
+    'Knowledge (History)','Knowledge (Local)','Knowledge (Nature)','Knowledge (Nobility)','Knowledge (Planes)','Knowledge (Religion)',
+    'Perception','Spellcraft']),
+  duelist:               new Set(['Acrobatics','Bluff','Escape Artist','Perception','Perform','Sense Motive']),
+  'eldritch knight':     new Set(['Climb','Knowledge (Arcana)','Knowledge (Nobility)','Linguistics','Ride','Sense Motive','Spellcraft','Swim']),
+  loremaster:            new Set(['Appraise','Diplomacy','Handle Animal','Heal',
+    'Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Engineering)','Knowledge (Geography)',
+    'Knowledge (History)','Knowledge (Local)','Knowledge (Nature)','Knowledge (Nobility)','Knowledge (Planes)','Knowledge (Religion)',
+    'Linguistics','Perform','Spellcraft','Use Magic Device']),
+  'mystic theurge':      new Set(['Knowledge (Arcana)','Knowledge (Religion)','Sense Motive','Spellcraft']),
+  'pathfinder chronicler': new Set(['Appraise','Bluff','Diplomacy','Disguise','Escape Artist','Intimidate',
+    'Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Engineering)','Knowledge (Geography)',
+    'Knowledge (History)','Knowledge (Local)','Knowledge (Nature)','Knowledge (Nobility)','Knowledge (Planes)','Knowledge (Religion)',
+    'Linguistics','Perception','Perform','Ride','Sense Motive','Sleight of Hand','Survival','Use Magic Device']),
+  shadowdancer:          new Set(['Acrobatics','Bluff','Diplomacy','Disguise','Escape Artist','Perception','Perform','Sleight of Hand','Stealth']),
+  // ── APG Prestige classes ─────────────────────────────────────────────────
+  'battle herald':       new Set(['Bluff','Craft','Diplomacy','Handle Animal','Heal','Intimidate','Knowledge (Engineering)','Knowledge (History)','Knowledge (Local)','Knowledge (Nobility)','Perception','Ride','Sense Motive']),
+  'holy vindicator':     new Set(['Climb','Heal','Intimidate','Knowledge (Planes)','Knowledge (Religion)','Ride','Sense Motive','Spellcraft','Swim']),
+  'horizon walker':      new Set(['Climb','Diplomacy','Handle Animal','Knowledge (Geography)','Knowledge (Nature)','Knowledge (Planes)','Linguistics','Perception','Stealth','Survival','Swim']),
+  'master chymist':      new Set(['Acrobatics','Climb','Escape Artist','Intimidate','Knowledge (Dungeoneering)','Sense Motive','Stealth','Swim']),
+  'master spy':          new Set(['Bluff','Diplomacy','Disable Device','Disguise','Escape Artist',
+    'Knowledge (Arcana)','Knowledge (Dungeoneering)','Knowledge (Engineering)','Knowledge (Geography)',
+    'Knowledge (History)','Knowledge (Local)','Knowledge (Nature)','Knowledge (Nobility)','Knowledge (Planes)','Knowledge (Religion)',
+    'Linguistics','Perception','Sense Motive','Sleight of Hand','Stealth','Use Magic Device']),
+  'nature warden':       new Set(['Climb','Handle Animal','Heal','Knowledge (Geography)','Knowledge (Nature)','Perception','Ride','Sense Motive','Survival','Swim']),
+  'rage prophet':        new Set(['Climb','Heal','Intimidate','Knowledge (History)','Knowledge (Religion)','Sense Motive','Spellcraft','Swim']),
+  'stalwart defender':   new Set(['Acrobatics','Climb','Intimidate','Perception','Sense Motive']),
 };
 
 // ─── Class Skill Bonuses ─────────────────────────────────────────────────────
@@ -8012,6 +8901,919 @@ const RACE_SKILL_BONUSES = {
   'Dhampir':    [{ feature:'Manipulative', skills:[{name:'Bluff', value:2, conditional:null},{name:'Perception', value:2, conditional:null}] }],
 };
 
+// ── Feat Effects — maps feat name (lowercase) to stat modifications ──────────
+// Same shape as CLASS_FEATURE_EFFECTS but keyed by feat name, all lowercase.
+// value: number (flat), or the string '_toughness' (computed from total HD).
+// Feats with conditional-only effects use stat:'_info' (display only, no calc).
+// Skill-boosting feats live in FEAT_SKILL_EFFECTS below.
+const FEAT_EFFECTS = {
+  // ── Saving Throws ──────────────────────────────────────────────────────────
+  'great fortitude':    [{ stat:'fort_misc', value:2, label:'+2 Fort (Great Fortitude)' }],
+  'iron will':          [{ stat:'will_misc', value:2, label:'+2 Will (Iron Will)' }],
+  'lightning reflexes': [{ stat:'ref_misc',  value:2, label:'+2 Ref (Lightning Reflexes)' }],
+  // ── Initiative ─────────────────────────────────────────────────────────────
+  'improved initiative':[{ stat:'init_misc', value:4, label:'+4 Initiative (Improved Initiative)' }],
+  // ── AC ─────────────────────────────────────────────────────────────────────
+  'dodge':              [{ stat:'ac_misc',   value:1, label:'+1 AC dodge (Dodge)' }],
+  // ── HP — Toughness scales with HD; value '_toughness' is handled in the wiring loop ──
+  'toughness':          [{ stat:'hp', value:'_toughness', label:'HP (Toughness)' }],
+  // ── Attack — Weapon Focus / Greater Weapon Focus ───────────────────────────
+  // Handled via weapon-equipped check in recomputeStatBonuses() — NOT in this table.
+  // (Bonus only applies when the chosen weapon is currently equipped.)
+  // ── Speed ──────────────────────────────────────────────────────────────────
+  'fleet':              [{ stat:'speed', value:5, label:'+5 ft speed (Fleet)' }],
+  // ── Additional AC feats ────────────────────────────────────────────────────
+  'shield focus':       [{ stat:'ac_misc', value:1, label:'+1 AC (Shield Focus)' }],
+  'greater shield focus': [{ stat:'ac_misc', value:1, label:'+1 AC (Greater Shield Focus)' }],
+  // ── Passive conditional feats — informational only (stat:'_info') ────────────
+  // Toggleable feats (Power Attack, Combat Expertise, Deadly Aim) have been moved
+  // to TOGGLEABLE_FEATS below and are no longer _info entries here.
+  'agile maneuvers':    [{ stat:'_info', value:0, label:'DEX to CMB instead of STR (Agile Maneuvers)' }],
+  'weapon finesse':     [{ stat:'_info', value:0, label:'DEX to melee attack instead of STR (Weapon Finesse)' }],
+  'point-blank shot':   [{ stat:'_info', value:0, label:'+1 atk/dmg within 30 ft (Point-Blank Shot)' }],
+  'two-weapon fighting':[{ stat:'_info', value:0, label:'Reduces TWF attack penalties (Two-Weapon Fighting)' }],
+  'mobility':           [{ stat:'_info', value:0, label:'+4 dodge AC vs AoO from movement (Mobility)' }],
+  'low profile':        [{ stat:'_info', value:0, label:'+1 dodge AC vs ranged attacks (Low Profile)' }],
+};
+
+// ── Toggleable Feat Registry ─────────────────────────────────────────────────
+// Feats (and combat options) that the player actively chooses to use each round.
+// Stored in character.featToggles[key] = true/false.
+// value/label functions receive (bab, isTwoHanded, acrobaticsRanks).
+// "fighting defensively" and "total defense" are combat options — no feat required.
+const TOGGLEABLE_FEATS = {
+  'power attack': {
+    label: 'Power Attack',
+    description: 'Trade melee attack bonus for extra damage (scales with BAB)',
+    isFeat: true,
+    bonuses: [
+      { stat: 'melee_misc',
+        value: (bab) => -(1 + Math.floor(bab / 4)),
+        label: (bab) => `\u22121 melee atk / +${2*(1+Math.floor(bab/4))} dmg (Power Attack at BAB ${bab})` },
+      { stat: 'dmg_misc',
+        value: (bab, twoHanded) => { const s = 1 + Math.floor(bab / 4); return twoHanded ? s * 3 : s * 2; },
+        label: (bab, twoHanded) => { const s = 1 + Math.floor(bab / 4); const d = twoHanded ? s*3 : s*2; return `+${d} melee damage (Power Attack)`; } },
+    ]
+  },
+  'combat expertise': {
+    label: 'Combat Expertise',
+    description: 'Trade melee attack bonus for dodge AC (scales with BAB)',
+    isFeat: true,
+    bonuses: [
+      { stat: 'melee_misc',
+        value: (bab) => -(1 + Math.floor(bab / 4)),
+        label: (bab) => `${-(1+Math.floor(bab/4))} melee attack (Combat Expertise)` },
+      { stat: 'ac_misc',
+        value: (bab) => 1 + Math.floor(bab / 4),
+        label: (bab) => `+${1+Math.floor(bab/4)} dodge AC (Combat Expertise)` },
+    ]
+  },
+  'deadly aim': {
+    label: 'Deadly Aim',
+    description: 'Trade ranged attack bonus for extra ranged damage (scales with BAB)',
+    isFeat: true,
+    bonuses: [
+      { stat: 'ranged_misc',
+        value: (bab) => -(1 + Math.floor(bab / 4)),
+        label: (bab) => `${-(1+Math.floor(bab/4))} ranged attack (Deadly Aim)` },
+      { stat: 'dmg_misc',
+        value: (bab) => 2 * (1 + Math.floor(bab / 4)),
+        label: (bab) => `+${2*(1+Math.floor(bab/4))} ranged damage (Deadly Aim)` },
+    ]
+  },
+  'fighting defensively': {
+    label: 'Fighting Defensively',
+    description: '\u22124 on all attacks, +2 dodge AC (+3 with 3+ Acrobatics ranks). No feat required.',
+    isFeat: false, // combat option — always available
+    bonuses: [
+      { stat: 'melee_misc',  value: () => -4, label: () => '\u22124 melee attack (Fighting Defensively)' },
+      { stat: 'ranged_misc', value: () => -4, label: () => '\u22124 ranged attack (Fighting Defensively)' },
+      { stat: 'ac_misc',
+        value: (_b, _t, acro) => acro >= 3 ? 3 : 2,
+        label: (_b, _t, acro) => `+${acro >= 3 ? 3 : 2} dodge AC (Fighting Defensively)` },
+    ]
+  },
+  'total defense': {
+    label: 'Total Defense',
+    description: '+4 dodge AC (+6 with 3+ Acrobatics ranks), cannot attack. No feat required.',
+    isFeat: false, // combat option — always available
+    bonuses: [
+      { stat: 'ac_misc',
+        value: (_b, _t, acro) => acro >= 3 ? 6 : 4,
+        label: (_b, _t, acro) => `+${acro >= 3 ? 6 : 4} dodge AC (Total Defense)` },
+    ]
+  },
+};
+
+// ── Feat Skill Effects — maps feat name (lowercase) to skill bonuses ─────────
+// Each entry: { skill, value, conditional }
+// "Skill Focus (X)" is handled via a regex match at runtime (see getSkillBonuses).
+const FEAT_SKILL_EFFECTS = {
+  'alertness':        [{ skill:'Perception',        value:2, conditional:null },
+                       { skill:'Sense Motive',       value:2, conditional:null }],
+  'athletic':         [{ skill:'Climb',              value:2, conditional:null },
+                       { skill:'Swim',               value:2, conditional:null }],
+  'acrobatic':        [{ skill:'Acrobatics',         value:2, conditional:null },
+                       { skill:'Fly',                value:2, conditional:null }],
+  'stealthy':         [{ skill:'Escape Artist',      value:2, conditional:null },
+                       { skill:'Stealth',            value:2, conditional:null }],
+  'persuasive':       [{ skill:'Diplomacy',          value:2, conditional:null },
+                       { skill:'Intimidate',         value:2, conditional:null }],
+  'deceitful':        [{ skill:'Bluff',              value:2, conditional:null },
+                       { skill:'Disguise',           value:2, conditional:null }],
+  'self-sufficient':  [{ skill:'Heal',               value:2, conditional:null },
+                       { skill:'Survival',           value:2, conditional:null }],
+  'magical aptitude': [{ skill:'Spellcraft',         value:2, conditional:null },
+                       { skill:'Use Magic Device',   value:2, conditional:null }],
+  'animal affinity':  [{ skill:'Handle Animal',      value:2, conditional:null },
+                       { skill:'Ride',               value:2, conditional:null }],
+  // ── Additional skill-boosting feats ────────────────────────────────────────
+  'deft hands':       [{ skill:'Disable Device',    value:2, conditional:null },
+                       { skill:'Sleight of Hand',   value:2, conditional:null }],
+  // Breadth of Experience: +2 to all Knowledge skills and Profession
+  'breadth of experience': [
+                       { skill:'Knowledge (Arcana)',       value:2, conditional:null },
+                       { skill:'Knowledge (Dungeoneering)',value:2, conditional:null },
+                       { skill:'Knowledge (Engineering)',  value:2, conditional:null },
+                       { skill:'Knowledge (Geography)',    value:2, conditional:null },
+                       { skill:'Knowledge (History)',      value:2, conditional:null },
+                       { skill:'Knowledge (Local)',        value:2, conditional:null },
+                       { skill:'Knowledge (Nature)',       value:2, conditional:null },
+                       { skill:'Knowledge (Nobility)',     value:2, conditional:null },
+                       { skill:'Knowledge (Planes)',       value:2, conditional:null },
+                       { skill:'Knowledge (Religion)',     value:2, conditional:null },
+                       { skill:'Profession',               value:2, conditional:null }],
+  'prodigious spotter': [{ skill:'Perception',      value:2, conditional:null }],
+  'improved stonecunning': [{ skill:'Perception',   value:4, conditional:'stonework only' }],
+  'childlike':        [{ skill:'Disguise',           value:2, conditional:'to appear as a human child' }],
+  'sociable':         [{ skill:'Diplomacy',          value:2, conditional:'on retry after failed check' }],
+  'ironguts':         [{ skill:'Survival',           value:2, conditional:'Constitution checks only' }],
+};
+
+// ── Skill-choice trait helpers ─────────────────────────────────────────────────
+// Some traits ask the player to "select one of the following skills" and apply a
+// bonus / class-skill grant to whichever they pick.  These functions detect that
+// pattern in a trait description and power the choice-prompt modal.
+
+// Parse a trait description for a skill-choice pattern.
+// Returns {options:[skillName,...], bonus:N, classSkill:bool} or null if not a choice trait.
+// ── Adopted Trait — Two-Step Race/Racial Trait Picker (Phase 9d) ──────────────
+// Single-step browser: player picks a racial trait directly, grouped by race type.
+// onConfirm(race, traitName) is called when both choices are confirmed.
+// 9d — Adopted trait: two-panel browser. Left=searchable trait list, right=full description.
+// onConfirm(race, traitName, traitObject) is called when the player confirms a selection.
+function showAdoptedRacePickerModal(onConfirm) {
+  // ── Build groups ──────────────────────────────────────────────────────────────
+  const _raceFromSubtype = sub =>
+    (sub || '').replace(/^racial_/, '').split('_')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('-');
+
+  const _racialTraits = (dataCache.traits || []).filter(t =>
+    t.subtype && /^racial_/i.test(t.subtype)
+  );
+  const _groupMap = {};
+  for (const t of _racialTraits) {
+    const rn = _raceFromSubtype(t.subtype);
+    if (!_groupMap[rn]) _groupMap[rn] = [];
+    _groupMap[rn].push(t);
+  }
+  const _groups = Object.entries(_groupMap)
+    .sort(([a],[b]) => a.localeCompare(b))
+    .map(([race, traits]) => ({ race, traits: traits.sort((a,b)=>(a.name||'').localeCompare(b.name||'')) }));
+
+  let selectedTrait = null;
+  let selectedRace  = null;
+  let selectedRow   = null;
+
+  // ── Overlay + modal ───────────────────────────────────────────────────────────
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:3300;background:rgba(0,0,0,0.80);' +
+    'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);';
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg-card);border:1px solid var(--gold-dark);border-radius:14px;' +
+    'padding:1.25rem 1.5rem 1rem;max-width:780px;width:97%;max-height:90vh;' +
+    'display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.75);';
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.innerHTML = `
+    <div style="font-family:Cinzel Decorative,serif;font-size:0.95rem;color:var(--gold);margin-bottom:0.2rem;">Adopted — Choose a Racial Trait</div>
+    <div style="font-family:Cinzel,serif;font-size:0.7rem;color:var(--text-secondary);margin-bottom:0.65rem;">Select a trait to read its description, then click <strong style="color:var(--gold);">Confirm</strong> to adopt it.</div>`;
+  modal.appendChild(hdr);
+
+  // Search
+  const searchInput = document.createElement('input');
+  searchInput.type = 'text';
+  searchInput.placeholder = '🔍  Search traits…';
+  searchInput.style.cssText = 'width:100%;box-sizing:border-box;background:var(--bg-surface);border:1px solid var(--border);' +
+    'border-radius:6px;color:var(--text-primary);font-family:Cinzel,serif;font-size:0.78rem;padding:0.3rem 0.6rem;' +
+    'margin-bottom:0.55rem;outline:none;';
+  modal.appendChild(searchInput);
+
+  // ── Two-panel body ────────────────────────────────────────────────────────────
+  const panels = document.createElement('div');
+  panels.style.cssText = 'flex:1;min-height:0;display:flex;gap:0.75rem;';
+
+  // Left: list
+  const listArea = document.createElement('div');
+  listArea.style.cssText = 'flex:0 0 52%;overflow-y:auto;border:1px solid var(--border);border-radius:6px;background:var(--bg-surface);';
+  panels.appendChild(listArea);
+
+  // Right: detail pane
+  const detailPane = document.createElement('div');
+  detailPane.style.cssText = 'flex:1;overflow-y:auto;border:1px solid var(--border);border-radius:6px;' +
+    'background:var(--bg-surface);padding:0.75rem 0.9rem;';
+  detailPane.innerHTML = `<div style="font-family:Cinzel,serif;font-size:0.72rem;color:var(--text-muted);font-style:italic;">Select a trait on the left to read its description here.</div>`;
+  panels.appendChild(detailPane);
+  modal.appendChild(panels);
+
+  // Show trait detail in right pane
+  function showDetail(t, race) {
+    const rawBody = (typeof traitBodyMap !== 'undefined' ? (traitBodyMap[(t.name||'').toLowerCase()] || '') : '')
+                  || t.description || t.benefit || '';
+    const bodyText = rawBody.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    detailPane.innerHTML = `
+      <div style="font-family:Cinzel Decorative,serif;font-size:0.85rem;color:var(--gold);margin-bottom:0.2rem;">${t.name}</div>
+      <div style="font-family:Cinzel,serif;font-size:0.65rem;color:rgba(201,168,76,0.6);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:0.55rem;">${race} Racial Trait</div>
+      <div style="font-size:0.8rem;color:var(--text-secondary);line-height:1.65;">${bodyText || '<em style="color:var(--text-muted);">No description available in the database.</em>'}</div>`;
+  }
+
+  // Render trait list
+  function renderGroups(filter) {
+    listArea.innerHTML = '';
+    const fl = (filter || '').toLowerCase().trim();
+    let anyShown = false;
+    for (const { race, traits } of _groups) {
+      const filtered = fl
+        ? traits.filter(t => (t.name||'').toLowerCase().includes(fl) ||
+                             (t.description||'').toLowerCase().includes(fl) ||
+                             race.toLowerCase().includes(fl))
+        : traits;
+      if (!filtered.length) continue;
+      anyShown = true;
+
+      const grpHdr = document.createElement('div');
+      grpHdr.style.cssText = 'padding:0.28rem 0.6rem;background:rgba(201,168,76,0.08);' +
+        'border-bottom:1px solid rgba(201,168,76,0.15);font-family:Cinzel,serif;font-size:0.66rem;' +
+        'color:var(--gold);text-transform:uppercase;letter-spacing:0.08em;position:sticky;top:0;z-index:1;';
+      grpHdr.textContent = `${race} (${filtered.length})`;
+      listArea.appendChild(grpHdr);
+
+      for (const t of filtered) {
+        const row = document.createElement('div');
+        row.style.cssText = 'padding:0.3rem 0.6rem;border-bottom:1px solid rgba(255,255,255,0.04);' +
+          'cursor:pointer;font-family:Cinzel,serif;font-size:0.75rem;color:var(--text-secondary);transition:background 0.1s;';
+        row.textContent = t.name;
+        row.dataset.traitName = t.name;
+
+        // If this was previously selected, restore highlight
+        if (selectedTrait && selectedTrait.name === t.name) {
+          row.style.background = 'rgba(201,168,76,0.18)';
+          row.style.color = 'var(--gold)';
+          selectedRow = row;
+        }
+
+        row.addEventListener('mouseover', () => {
+          if (selectedTrait && selectedTrait.name !== t.name)
+            row.style.background = 'rgba(201,168,76,0.08)';
+        });
+        row.addEventListener('mouseout', () => {
+          if (!selectedTrait || selectedTrait.name !== t.name)
+            row.style.background = '';
+        });
+        row.addEventListener('click', () => {
+          // De-select previous
+          if (selectedRow) {
+            selectedRow.style.background = '';
+            selectedRow.style.color = 'var(--text-secondary)';
+          }
+          // Select this
+          selectedTrait = t;
+          selectedRace  = race;
+          selectedRow   = row;
+          row.style.background = 'rgba(201,168,76,0.18)';
+          row.style.color = 'var(--gold)';
+          showDetail(t, race);
+          // Enable confirm button
+          confirmBtn.disabled = false;
+          confirmBtn.style.opacity = '1';
+          confirmBtn.style.cursor = 'pointer';
+        });
+        listArea.appendChild(row);
+      }
+    }
+    if (!anyShown) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:1.5rem;text-align:center;color:var(--text-muted);font-size:0.78rem;font-style:italic;';
+      empty.textContent = fl ? `No racial traits match "${fl}".` : 'No racial traits found in the database.';
+      listArea.appendChild(empty);
+    }
+  }
+
+  // ── Footer ─────────────────────────────────────────────────────────────────
+  const footer = document.createElement('div');
+  footer.style.cssText = 'display:flex;gap:0.6rem;justify-content:flex-end;margin-top:0.65rem;';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.cssText = 'font-family:Cinzel,serif;font-size:0.7rem;padding:0.3rem 0.85rem;background:transparent;' +
+    'border:1px solid var(--border);border-radius:5px;color:var(--text-muted);cursor:pointer;';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  const confirmBtn = document.createElement('button');
+  confirmBtn.textContent = 'Confirm Selection';
+  confirmBtn.disabled = true;
+  confirmBtn.style.cssText = 'font-family:Cinzel,serif;font-size:0.7rem;padding:0.3rem 0.9rem;' +
+    'background:rgba(100,200,120,0.15);border:1px solid rgba(100,200,120,0.3);border-radius:5px;color:#80c890;' +
+    'cursor:default;opacity:0.45;';
+  confirmBtn.addEventListener('click', () => {
+    if (!selectedTrait || confirmBtn.disabled) return;
+    overlay.remove();
+    onConfirm(selectedRace, selectedTrait.name, selectedTrait);
+  });
+  footer.appendChild(cancelBtn);
+  footer.appendChild(confirmBtn);
+  modal.appendChild(footer);
+
+  renderGroups('');
+  searchInput.addEventListener('input', () => renderGroups(searchInput.value));
+  searchInput.addEventListener('keydown', e => { if (e.key === 'Escape') overlay.remove(); });
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  searchInput.focus();
+}
+
+function parseTraitSkillChoice(description) {
+  if (!description) return null;
+  const text = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  // Require an explicit choice indicator
+  if (!/\b(select one|choose one|your choice|of your choice)\b/i.test(text)) return null;
+
+  const skillNames = PF1E_SKILLS.map(s => s.name);
+  let options = [];
+
+  // Pattern A: "Select one of the following skills: A, B, or C"
+  const listM = text.match(
+    /(?:select|choose)\s+one\s+of\s+the\s+following\s+skills?\s*[^:]*:\s*([^.]+)/i
+  ) || text.match(
+    /one\s+of\s+the\s+following\s+skills?\s*[^:]*:\s*([^.]+)/i
+  );
+  if (listM) {
+    const parts = listM[1].split(/,\s*|\s+or\s+/i).map(p =>
+      p.trim().replace(/\s*checks?\s*$/i, '').trim()
+    ).filter(Boolean);
+    for (const part of parts) {
+      const partL = part.toLowerCase();
+      const match = skillNames.find(sk => sk.toLowerCase() === partL);
+      if (match) options.push(match);
+    }
+  }
+
+  // Pattern B: no explicit list — pick out every named skill mentioned in the description
+  // (covers "one of these skills (your choice)" where the list appears elsewhere in the sentence)
+  if (options.length < 2) {
+    options = [];
+    for (const sk of skillNames) {
+      // word-boundary match, escape parentheses in skill names like Knowledge (Arcana)
+      const rx = new RegExp('\\b' + sk.replace(/[()/]/g, '\\$&') + '\\b', 'i');
+      if (rx.test(text)) options.push(sk);
+    }
+  }
+
+  if (options.length < 2) return null;
+
+  const bonusM = text.match(/\+(\d+)\s+trait\s+bonus/i);
+  const bonus  = bonusM ? parseInt(bonusM[1]) : 0;
+  const classSkill = /is\s+(?:always\s+)?a\s+class\s+skill/i.test(text);
+
+  return { options, bonus, classSkill };
+}
+
+// Show a modal asking the player to pick one skill from a list.
+// onConfirm(skillName) is called when they make a selection.
+function showTraitSkillChoiceModal(traitName, choiceData, onConfirm) {
+  if (!choiceData || !choiceData.options || choiceData.options.length < 2) return;
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:3200;background:rgba(0,0,0,0.75);' +
+    'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg-card);border:1px solid var(--gold-dark);border-radius:14px;' +
+    'padding:1.75rem 2rem;max-width:380px;width:92%;box-shadow:0 12px 48px rgba(0,0,0,0.75);';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-family:"Cinzel Decorative",serif;font-size:1rem;color:var(--gold);' +
+    'margin-bottom:0.5rem;text-align:center;';
+  title.textContent = 'Choose a Skill';
+
+  const sub = document.createElement('div');
+  sub.style.cssText = 'font-family:Cinzel,serif;font-size:0.7rem;color:var(--text-secondary);' +
+    'margin-bottom:1.1rem;text-align:center;letter-spacing:0.05em;';
+  const extras = [];
+  if (choiceData.bonus > 0) extras.push(`+${choiceData.bonus} trait bonus`);
+  if (choiceData.classSkill) extras.push('class skill');
+  sub.textContent = `${traitName} — pick one skill${extras.length ? ' to gain: ' + extras.join(' + ') : ':'}`;
+
+  const list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:0.45rem;margin-bottom:1.25rem;';
+
+  let chosen = null;
+  const btns = [];
+
+  for (const sk of choiceData.options) {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;' +
+      'padding:0.55rem 1rem;font-family:Cinzel,serif;font-size:0.78rem;color:var(--text-primary);' +
+      'cursor:pointer;text-align:left;transition:background 0.15s,border-color 0.15s;';
+    btn.textContent = sk;
+    btn.addEventListener('click', () => {
+      chosen = sk;
+      btns.forEach(b => {
+        b.style.background = 'var(--bg-surface)';
+        b.style.borderColor = 'var(--border)';
+        b.style.color = 'var(--text-primary)';
+      });
+      btn.style.background = 'rgba(201,168,76,0.18)';
+      btn.style.borderColor = 'var(--gold)';
+      btn.style.color = 'var(--gold)';
+      confirmBtn.disabled = false;
+    });
+    btn.addEventListener('mouseenter', () => { if (chosen !== sk) btn.style.background = 'var(--bg-deep)'; });
+    btn.addEventListener('mouseleave', () => { if (chosen !== sk) btn.style.background = 'var(--bg-surface)'; });
+    btns.push(btn);
+    list.appendChild(btn);
+  }
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.disabled = true;
+  confirmBtn.style.cssText = 'width:100%;background:linear-gradient(135deg,var(--gold) 0%,var(--gold-dark) 100%);' +
+    'color:#1a1008;border:none;border-radius:9px;padding:0.65rem;font-family:Cinzel,serif;' +
+    'font-size:0.82rem;font-weight:700;cursor:pointer;opacity:0.5;transition:opacity 0.2s;';
+  confirmBtn.textContent = 'Confirm Choice';
+  confirmBtn.addEventListener('click', () => {
+    if (!chosen) return;
+    overlay.remove();
+    onConfirm(chosen);
+  });
+  // Enable button styling when not disabled
+  const _updateConfirmStyle = () => {
+    confirmBtn.style.opacity = confirmBtn.disabled ? '0.5' : '1';
+    confirmBtn.style.cursor  = confirmBtn.disabled ? 'not-allowed' : 'pointer';
+  };
+  const _obs = new MutationObserver(_updateConfirmStyle);
+  _obs.observe(confirmBtn, { attributes:true, attributeFilter:['disabled'] });
+
+  modal.appendChild(title);
+  modal.appendChild(sub);
+  modal.appendChild(list);
+  modal.appendChild(confirmBtn);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+// ── Feat choice type table ─────────────────────────────────────────────────────
+// Maps feat name (lowercase) → choice type string, or null if no choice is needed.
+//   'skill'  → player picks one skill from PF1E_SKILLS
+//   'weapon' → player types a weapon name (e.g. "Longsword")
+//   'school' → player picks a spell school from SPELL_SCHOOLS
+const FEAT_CHOICE_TYPES = {
+  // Skill choices
+  'skill focus':                   'skill',
+  // Weapon choices
+  'weapon focus':                  'weapon',
+  'greater weapon focus':          'weapon',
+  'weapon specialization':         'weapon',
+  'greater weapon specialization': 'weapon',
+  'improved critical':             'weapon',
+  'exotic weapon proficiency':     'weapon',
+  // Spell school choices
+  'spell focus':                   'school',
+  'greater spell focus':           'school',
+  'elemental spell':               'element',
+};
+
+// Spell school names for Spell Focus picker
+const SPELL_SCHOOLS = [
+  'Abjuration','Conjuration','Divination','Enchantment',
+  'Evocation','Illusion','Necromancy','Transmutation',
+];
+
+// Elemental descriptors for Elemental Spell metamagic
+const SPELL_ELEMENTS = ['Acid','Cold','Electricity','Fire'];
+
+// Return the choice type for a feat name (checks base name only, ignoring parenthetical).
+// e.g. "Skill Focus (Perception)" → null (already has choice embedded in name)
+//      "Skill Focus"              → 'skill'
+function parseFeatChoiceType(featName) {
+  const key = (featName || '').toLowerCase().trim();
+  // If the feat name already has a parenthetical (e.g. "Weapon Focus (Longsword)"),
+  // the choice is embedded — no modal needed.
+  if (/\(.+\)/.test(key)) return null;
+  return FEAT_CHOICE_TYPES[key] ?? null;
+}
+
+// Show a modal prompting the player to pick an option for a choice-required feat.
+// choiceType: 'skill' | 'weapon' | 'school' | 'element'
+// onConfirm(chosenString) is called when the player confirms.
+function showFeatChoiceModal(featName, choiceType, onConfirm) {
+  if (!choiceType) return;
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:3200;background:rgba(0,0,0,0.75);' +
+    'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px);';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg-card);border:1px solid var(--gold-dark);border-radius:14px;' +
+    'padding:1.75rem 2rem;max-width:400px;width:92%;box-shadow:0 12px 48px rgba(0,0,0,0.75);' +
+    'display:flex;flex-direction:column;gap:0.7rem;max-height:80vh;';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-family:"Cinzel Decorative",serif;font-size:1rem;color:var(--gold);text-align:center;';
+  title.textContent = featName;
+
+  const sub = document.createElement('div');
+  sub.style.cssText = 'font-family:Cinzel,serif;font-size:0.7rem;color:var(--text-secondary);text-align:center;letter-spacing:0.05em;';
+
+  let chosen = null;
+  let confirmBtn;
+
+  const _enable = (val) => {
+    chosen = val;
+    if (confirmBtn) {
+      confirmBtn.disabled = !val;
+      confirmBtn.style.opacity = val ? '1' : '0.5';
+      confirmBtn.style.cursor  = val ? 'pointer' : 'not-allowed';
+    }
+  };
+
+  if (choiceType === 'skill') {
+    sub.textContent = 'Choose one skill to apply this feat to:';
+    const searchBox = document.createElement('input');
+    searchBox.placeholder = 'Filter skills…';
+    searchBox.style.cssText = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:7px;' +
+      'padding:0.45rem 0.7rem;font-family:Cinzel,serif;font-size:0.75rem;color:var(--text-primary);width:100%;box-sizing:border-box;';
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:0.3rem;overflow-y:auto;max-height:320px;' +
+      'border:1px solid var(--border);border-radius:8px;padding:0.35rem;background:var(--bg-surface);';
+
+    const allBtns = [];
+    for (const sk of PF1E_SKILLS) {
+      const btn = document.createElement('button');
+      btn.style.cssText = 'background:transparent;border:1px solid transparent;border-radius:6px;' +
+        'padding:0.4rem 0.65rem;font-family:Cinzel,serif;font-size:0.74rem;color:var(--text-primary);' +
+        'cursor:pointer;text-align:left;transition:background 0.12s,border-color 0.12s;';
+      btn.textContent = sk.name;
+      btn.dataset.skillName = sk.name.toLowerCase();
+      btn.addEventListener('click', () => {
+        allBtns.forEach(b => { b.style.background='transparent'; b.style.borderColor='transparent'; b.style.color='var(--text-primary)'; });
+        btn.style.background = 'rgba(201,168,76,0.18)';
+        btn.style.borderColor = 'var(--gold)';
+        btn.style.color = 'var(--gold)';
+        _enable(sk.name);
+      });
+      btn.addEventListener('mouseenter', () => { if (chosen !== sk.name) btn.style.background = 'var(--bg-deep)'; });
+      btn.addEventListener('mouseleave', () => { if (chosen !== sk.name) btn.style.background = 'transparent'; });
+      allBtns.push(btn);
+      list.appendChild(btn);
+    }
+
+    searchBox.addEventListener('input', () => {
+      const q = searchBox.value.toLowerCase();
+      allBtns.forEach(b => {
+        b.style.display = b.dataset.skillName.includes(q) ? '' : 'none';
+      });
+    });
+
+    modal.appendChild(title);
+    modal.appendChild(sub);
+    modal.appendChild(searchBox);
+    modal.appendChild(list);
+
+  } else if (choiceType === 'school') {
+    sub.textContent = 'Choose a spell school:';
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:0.45rem;';
+    const schoolBtns = [];
+    for (const sch of SPELL_SCHOOLS) {
+      const btn = document.createElement('button');
+      btn.style.cssText = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;' +
+        'padding:0.55rem 0.5rem;font-family:Cinzel,serif;font-size:0.75rem;color:var(--text-primary);' +
+        'cursor:pointer;transition:background 0.12s,border-color 0.12s;';
+      btn.textContent = sch;
+      btn.addEventListener('click', () => {
+        schoolBtns.forEach(b => { b.style.background='var(--bg-surface)'; b.style.borderColor='var(--border)'; b.style.color='var(--text-primary)'; });
+        btn.style.background = 'rgba(201,168,76,0.18)';
+        btn.style.borderColor = 'var(--gold)';
+        btn.style.color = 'var(--gold)';
+        _enable(sch);
+      });
+      schoolBtns.push(btn);
+      grid.appendChild(btn);
+    }
+    modal.appendChild(title);
+    modal.appendChild(sub);
+    modal.appendChild(grid);
+
+  } else if (choiceType === 'element') {
+    sub.textContent = 'Choose an energy type:';
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:0.45rem;';
+    const elemBtns = [];
+    for (const el of SPELL_ELEMENTS) {
+      const btn = document.createElement('button');
+      btn.style.cssText = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;' +
+        'padding:0.55rem 0.5rem;font-family:Cinzel,serif;font-size:0.75rem;color:var(--text-primary);' +
+        'cursor:pointer;transition:background 0.12s,border-color 0.12s;';
+      btn.textContent = el;
+      btn.addEventListener('click', () => {
+        elemBtns.forEach(b => { b.style.background='var(--bg-surface)'; b.style.borderColor='var(--border)'; b.style.color='var(--text-primary)'; });
+        btn.style.background = 'rgba(201,168,76,0.18)';
+        btn.style.borderColor = 'var(--gold)';
+        btn.style.color = 'var(--gold)';
+        _enable(el);
+      });
+      elemBtns.push(btn);
+      grid.appendChild(btn);
+    }
+    modal.appendChild(title);
+    modal.appendChild(sub);
+    modal.appendChild(grid);
+
+  } else if (choiceType === 'weapon') {
+    sub.textContent = 'Enter the weapon type this feat applies to:';
+
+    const inp = document.createElement('input');
+    inp.placeholder = 'e.g. Longsword, Greataxe, Shortbow…';
+    inp.style.cssText = 'background:var(--bg-surface);border:1px solid var(--border);border-radius:7px;' +
+      'padding:0.55rem 0.8rem;font-family:Cinzel,serif;font-size:0.8rem;color:var(--text-primary);' +
+      'width:100%;box-sizing:border-box;';
+
+    // Populate suggestions from equipped weapons + known weapon names
+    const _weapSuggestions = [];
+    for (const wName of Object.keys(character.equipped || {})) {
+      const wKey = wName.toLowerCase();
+      if (weaponMiscMap && weaponMiscMap[wKey]) _weapSuggestions.push(wName);
+    }
+    if (typeof weaponMiscMap !== 'undefined') {
+      // Add up to 40 common weapon names from the DB
+      let count = 0;
+      for (const k of Object.keys(weaponMiscMap)) {
+        if (count++ > 40) break;
+        const display = k.replace(/\b\w/g, c => c.toUpperCase());
+        if (!_weapSuggestions.includes(display)) _weapSuggestions.push(display);
+      }
+    }
+
+    if (_weapSuggestions.length > 0) {
+      const datalistId = '_feat-weapon-suggestions';
+      const dl = document.createElement('datalist');
+      dl.id = datalistId;
+      _weapSuggestions.forEach(w => {
+        const opt = document.createElement('option');
+        opt.value = w;
+        dl.appendChild(opt);
+      });
+      inp.setAttribute('list', datalistId);
+      modal.appendChild(dl);
+    }
+
+    inp.addEventListener('input', () => _enable(inp.value.trim() || null));
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && inp.value.trim()) {
+        _enable(inp.value.trim());
+        if (confirmBtn && !confirmBtn.disabled) confirmBtn.click();
+      }
+    });
+
+    modal.appendChild(title);
+    modal.appendChild(sub);
+    modal.appendChild(inp);
+    // Focus after paint
+    requestAnimationFrame(() => inp.focus());
+  }
+
+  confirmBtn = document.createElement('button');
+  confirmBtn.disabled = true;
+  confirmBtn.style.cssText = 'width:100%;background:linear-gradient(135deg,var(--gold) 0%,var(--gold-dark) 100%);' +
+    'color:#1a1008;border:none;border-radius:9px;padding:0.65rem;font-family:Cinzel,serif;' +
+    'font-size:0.82rem;font-weight:700;cursor:not-allowed;opacity:0.5;transition:opacity 0.2s;';
+  confirmBtn.textContent = 'Confirm Choice';
+  confirmBtn.addEventListener('click', () => {
+    if (!chosen) return;
+    overlay.remove();
+    onConfirm(chosen);
+  });
+
+  modal.appendChild(confirmBtn);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+}
+
+// ── Trait Effects — maps character trait name (lowercase) to stat mods ────────
+// Flat unconditional bonuses have value > 0 and are applied to stat totals.
+// Conditional bonuses have value:0, conditional:'condition text', and stat:'cond_*'
+//   — they display in the save/init breakdown as notes but do NOT affect totals.
+// Informational entries use stat:'_info' and are skipped entirely (display only via TRAIT_INFO_TAGS).
+const TRAIT_EFFECTS = {
+  // ── Initiative (flat) ──────────────────────────────────────────────────────
+  'reactionary':          [{ stat:'init_misc', value:2, label:'+2 Initiative (Reactionary)' }],
+  'warrior of old':       [{ stat:'init_misc', value:2, label:'+2 Initiative (Warrior of Old)' }],
+  'uncanny reflexes':     [{ stat:'init_misc', value:2, label:'+2 Initiative (Uncanny Reflexes)' }],
+  'elven reflexes':       [{ stat:'init_misc', value:2, label:'+2 Initiative (Elven Reflexes)' }],
+  'tactician':            [{ stat:'init_misc', value:1, label:'+1 Initiative (Tactician)' }],
+  'rapscallion':          [{ stat:'init_misc', value:1, label:'+1 Initiative (Rapscallion)' }],
+  'veteran of battle':    [{ stat:'init_misc', value:1, label:'+1 Initiative (Veteran of Battle)' }],
+  // ── Initiative (conditional) ───────────────────────────────────────────────
+  'tunnel fighter':       [{ stat:'cond_init', value:0, displayValue:2, label:'+2 Initiative (while underground)', conditional:'while underground' }],
+  // ── Fort (flat) ────────────────────────────────────────────────────────────
+  'resilient':            [{ stat:'fort_misc', value:1, label:'+1 Fort (Resilient)' }],
+  'forlorn':              [{ stat:'fort_misc', value:1, label:'+1 Fort (Forlorn)' }],
+  'life of toil':         [{ stat:'fort_misc', value:1, label:'+1 Fort (Life of Toil)' }],
+  'deft dodger':          [{ stat:'ref_misc',  value:1, label:'+1 Reflex (Deft Dodger)' }],
+  // ── Will (flat) ────────────────────────────────────────────────────────────
+  'indomitable faith':    [{ stat:'will_misc', value:1, label:'+1 Will (Indomitable Faith)' }],
+  // ── Saves (conditional — shown as notes in breakdown, NOT added to total) ──
+  'animal friend':        [{ stat:'cond_will', value:0, displayValue:1,  label:'+1 Will (when animal within 30 ft)',         conditional:'when friendly animal is within 30 ft' }],
+  'courageous':           [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. fear',                          conditional:'vs. fear effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. fear',                          conditional:'vs. fear effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. fear',                          conditional:'vs. fear effects' }],
+  'focused disciple':     [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion',              conditional:'vs. charm and compulsion effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion',              conditional:'vs. charm and compulsion effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion',              conditional:'vs. charm and compulsion effects' }],
+  'birthmark':            [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion',              conditional:'vs. charm and compulsion effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion',              conditional:'vs. charm and compulsion effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion',              conditional:'vs. charm and compulsion effects' }],
+  'disdainful defender':  [{ stat:'cond_will', value:0, displayValue:2,  label:'+2 Will vs. divine spells (other faiths)',   conditional:'vs. divine spells from other faiths' }],
+  'fortified drinker':    [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 Fort vs. mind-affecting (after drinking)',  conditional:'vs. mind-affecting, for 1 hour after drinking' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 Ref vs. mind-affecting (after drinking)',   conditional:'vs. mind-affecting, for 1 hour after drinking' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 Will vs. mind-affecting (after drinking)',  conditional:'vs. mind-affecting, for 1 hour after drinking' }],
+  'history of heresy':    [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 saves vs. divine spells',                 conditional:'vs. divine spells (requires no divine casting class)' },
+                           { stat:'cond_ref',  value:0, displayValue:1,  label:'+1 saves vs. divine spells',                 conditional:'vs. divine spells (requires no divine casting class)' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 saves vs. divine spells',                 conditional:'vs. divine spells (requires no divine casting class)' }],
+  'reincarnated':         [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. fear/death effects',            conditional:'vs. fear and death effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. fear/death effects',            conditional:'vs. fear and death effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. fear/death effects',            conditional:'vs. fear and death effects' }],
+  'grief-filled':         [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. emotion effects',              conditional:'vs. emotion spells and effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. emotion effects',              conditional:'vs. emotion spells and effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. emotion effects',              conditional:'vs. emotion spells and effects' }],
+  'failed apprentice':    [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 saves vs. arcane spells',                conditional:'vs. arcane spells' },
+                           { stat:'cond_ref',  value:0, displayValue:1,  label:'+1 saves vs. arcane spells',                conditional:'vs. arcane spells' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 saves vs. arcane spells',                conditional:'vs. arcane spells' }],
+  'skeptic':              [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. illusions',                    conditional:'vs. illusion spells and effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. illusions',                    conditional:'vs. illusion spells and effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. illusions',                    conditional:'vs. illusion spells and effects' }],
+  'principled':           [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion/emotion',     conditional:'vs. charm, compulsion, and emotion effects' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion/emotion',     conditional:'vs. charm, compulsion, and emotion effects' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. charm/compulsion/emotion',     conditional:'vs. charm, compulsion, and emotion effects' }],
+  'resolve of the rejected': [{ stat:'cond_fort', value:0, displayValue:1, label:'+1 saves vs. charm/compulsion',           conditional:'vs. charm and compulsion effects' },
+                              { stat:'cond_ref',  value:0, displayValue:1, label:'+1 saves vs. charm/compulsion',           conditional:'vs. charm and compulsion effects' },
+                              { stat:'cond_will', value:0, displayValue:1, label:'+1 saves vs. charm/compulsion',           conditional:'vs. charm and compulsion effects' }],
+  'desert child':         [{ stat:'cond_fort', value:0, displayValue:4,  label:'+4 Fort vs. hot conditions',               conditional:'vs. hot weather conditions' },
+                           { stat:'cond_fort', value:0, displayValue:1,  label:'+1 Fort vs. fire effects',                 conditional:'vs. fire damage and effects' }],
+  'tundra child':         [{ stat:'cond_fort', value:0, displayValue:4,  label:'+4 Fort vs. cold conditions',              conditional:'vs. cold weather conditions' },
+                           { stat:'cond_fort', value:0, displayValue:1,  label:'+1 Fort vs. cold effects',                 conditional:'vs. cold damage and effects' }],
+  'black powder fortune': [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. curse/fear/emotion (firearm)', conditional:'vs. curse, fear, and emotion while wielding a firearm' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. curse/fear/emotion (firearm)', conditional:'vs. curse, fear, and emotion while wielding a firearm' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. curse/fear/emotion (firearm)', conditional:'vs. curse, fear, and emotion while wielding a firearm' }],
+  'pain is pleasure':     [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 Fort/Will (when below half HP)',         conditional:'when below half maximum HP' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 Fort/Will (when below half HP)',         conditional:'when below half maximum HP' }],
+  'greater purpose':      [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 saves vs. death effects',               conditional:'vs. death effects' },
+                           { stat:'cond_ref',  value:0, displayValue:1,  label:'+1 saves vs. death effects',               conditional:'vs. death effects' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 saves vs. death effects',               conditional:'vs. death effects' }],
+  'perpetual companion':  [{ stat:'cond_fort', value:0, displayValue:2,  label:'+2 saves vs. fear (eidolon within 30 ft)', conditional:'vs. fear when eidolon is within 30 ft' },
+                           { stat:'cond_ref',  value:0, displayValue:2,  label:'+2 saves vs. fear (eidolon within 30 ft)', conditional:'vs. fear when eidolon is within 30 ft' },
+                           { stat:'cond_will', value:0, displayValue:2,  label:'+2 saves vs. fear (eidolon within 30 ft)', conditional:'vs. fear when eidolon is within 30 ft' }],
+  'fearless defiance':    [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 saves vs. fear',                        conditional:'vs. fear effects' },
+                           { stat:'cond_ref',  value:0, displayValue:1,  label:'+1 saves vs. fear',                        conditional:'vs. fear effects' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 saves vs. fear',                        conditional:'vs. fear effects' }],
+  'veiled disciple':      [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 saves vs. charm/compulsion',            conditional:'vs. charm and compulsion effects' },
+                           { stat:'cond_ref',  value:0, displayValue:1,  label:'+1 saves vs. charm/compulsion',            conditional:'vs. charm and compulsion effects' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 saves vs. charm/compulsion',            conditional:'vs. charm and compulsion effects' }],
+  'wanderer\'s shroud':   [{ stat:'cond_fort', value:0, displayValue:1,  label:'+1 saves vs. scrying/mind-reading',        conditional:'vs. scrying and mind-reading effects' },
+                           { stat:'cond_ref',  value:0, displayValue:1,  label:'+1 saves vs. scrying/mind-reading',        conditional:'vs. scrying and mind-reading effects' },
+                           { stat:'cond_will', value:0, displayValue:1,  label:'+1 saves vs. scrying/mind-reading',        conditional:'vs. scrying and mind-reading effects' }],
+  'evasive sting':        [{ stat:'cond_ac',   value:0, displayValue:1,  label:'+1 dodge AC vs. favored enemy (2+ sizes larger)', conditional:'dodge AC vs. favored enemy 2+ sizes larger' }],
+  // ── Concentration (flat — 9b) ───────────────────────────────────────────────
+  'arcane temper':        [{ stat:'conc_misc', value:1, label:'+1 Concentration (Arcane Temper)' },
+                           { stat:'init_misc', value:1, label:'+1 Initiative (Arcane Temper)' }],
+  'focused mind':         [{ stat:'conc_misc', value:2, label:'+2 Concentration (Focused Mind)' }],
+  'desperate resolve':    [{ stat:'conc_misc', value:1, label:'+1 Concentration (Desperate Resolve)' }],
+};
+
+// ── Trait Info Tags — display-only purple tags for non-stat trait mechanics ───
+// Each entry maps trait name (lowercase) to an array of star-prefixed tag strings.
+// These are rendered as purple pills on browse cards and character page — NO stat wiring.
+const TRAIT_INFO_TAGS = {
+  'fate\'s favored':        ['★ Luck bonuses +1'],
+  'magical knack':          ['★ +2 Caster Level (max HD)'],
+  'resilient caster':       ['★ +1 CL vs. Dispel'],
+  'sacred conduit':         ['★ +1 Channel DC'],
+  'sacred touch':           ['★ Stabilize by Touch'],
+  'beacon of faith':        ['★ +2 CL Domain Power (1/day)'],
+  'hedge magician':         ['★ -5% Craft Cost'],
+  'birthmark':              ['★ Divine Focus (birthmark)'],
+  'magical talent':         ['★ Cantrip SLA (1/day)'],
+  'gifted adept':           ['★ +1 CL (one spell)'],
+  'magical lineage':        ['★ -1 Metamagic Level (one spell)'],
+  'shrouded casting':       ['★ Eschew Materials (one school)'],
+  'inspired':               ['★ Reroll Check (1/day)'],
+  'tireless logic':         ['★ Reroll INT Check (1/day)'],
+  'worldly':                ['★ Reroll Untrained Check (1/day)'],
+  'never stop shooting':    ['★ Diehard (firearms only)'],
+  'possessed':              ['★ Untrained Knowledge (1/day)'],
+  'oathbound':              ['★ Reroll Save vs. Charm/Compulsion (1/day)'],
+  'enduring mutagen':       ['★ +1 min/lvl Mutagen Duration'],
+  'tenacious shifting':     ['★ +2 Rounds Transmutation Duration'],
+  'focused burn':           ['★ +1 Fire Dmg per 2d6 on Bombs'],
+  'volatile conduit':       ['★ +1d4 Energy Dmg (1/day)'],
+  'ascendant recollection': ['★ +1 Effective Sorcerer Level (1st Bloodline Power)'],
+  'cross-disciplined':      ['★ +1 CL Magus/Wiz Spell (1/day)'],
+  'cross-knowledge':        ['★ +1 CL Extract (1/day)'],
+  'unstable mutagen':       ['★ Unstable Mutagen (rolls on table)'],
+  'malleable magic':        ['★ Lose Spell → Regain Arcane Pool (1/day)'],
+  'arcane revitalization':  ['★ Arcane Pool on Critical Hit (1/day)'],
+  'martial performer':      ['★ Swap Monk Bonus Feat for Performance Feat'],
+  'natural-born leader':    ['★ +1 Morale Bonus (cohorts/summons)'],
+  'air-touched':            ['★ DR 1/— vs. Air Effects'],
+  'earth-touched':          ['★ DR 1/— vs. Earth Effects'],
+  'flame-touched':          ['★ DR 1/— vs. Fire Effects'],
+  'water-touched':          ['★ DR 1/— vs. Water Effects'],
+  'storm-touched':          ['★ DR 1/— vs. Electricity Effects'],
+  'unscathed':              ['★ Energy Resistance +2'],
+  'surface stranger':       ['★ -10% Miss Chance in Darkness; Dazzled in Bright Light'],
+  'flame of the dawnflower':['★ +2 Fire Dmg on Scimitar Critical'],
+  'bloodthirsty':           ['★ +1 Dmg when Dropping Foe or Confirming Crit'],
+  'axe to grind':           ['★ +1 Dmg when Only You Threaten Target'],
+  'killer':                 ['★ +Crit Multiplier Dmg on Confirmed Crit'],
+  'dirty fighter':          ['★ +1 Dmg while Flanking'],
+  'dedicated defender':     ['★ +1 Atk/CL near Dying Ally'],
+  'dispelled battler':      ['★ +1 Atk/Dmg in Antimagic Field'],
+  'indelible ire':          ['★ +1 Atk for 1 Round after Enemy Crits You'],
+  'armor expert':           ['★ ACP -1'],
+  'anatomist':              ['★ +1 to Confirm Critical Hits'],
+  'bullied':                ['★ +1 AoO Dmg with Unarmed Strike'],
+  'fencer':                 ['★ +1 AoO Atk with Light/One-Handed Blades'],
+  'surprise weapon':        ['★ +2 Atk with Improvised Weapons'],
+  'hidden hand':            ['★ +1 Atk (surprise attack, light weapon)'],
+  'blessed':                ['★ +1 All Saves (1 round, 1/day)'],
+  'river rat':              ['★ +1 Dagger Damage'],
+  'adopted':                ['★ Adopted: gains one racial trait from another race'],
+  'greatness':              ['★ Aura of Greatness (domain power +1)'],
+};
+
+// ── Trait Ability Overrides — traits that change which ability score a skill uses ─
+// Maps trait name (lowercase) to { skill, ability } — applied when trait is added.
+const TRAIT_ABILITY_OVERRIDES = {
+  'bruising intellect':  { skill: 'Intimidate',            ability: 'int' },
+  'pragmatic activator': { skill: 'Use Magic Device',      ability: 'int' },
+  'precise treatment':   { skill: 'Heal',                  ability: 'int' },
+  'planar savant':       { skill: 'Knowledge (Planes)',    ability: 'cha' },
+};
+
+// ── Magic item stat bonus patterns ────────────────────────────────────────────
+// Each entry: { rx (regex matching item name), stats (array of stat keys to boost),
+//              fixedVal (optional — use this instead of parsed +N) }
+// The regex should have one capture group for the numeric enhancement bonus when fixedVal absent.
+const MAGIC_ITEM_STAT_PATTERNS = [
+  // ── Physical stat belts ──────────────────────────────────────────────────
+  { rx:/belt of giant strength \+(\d+)/i,               stats:['str'] },
+  { rx:/belt of incredible dexterity \+(\d+)/i,         stats:['dex'] },
+  { rx:/belt of mighty constitution \+(\d+)/i,           stats:['con'] },
+  { rx:/belt of physical might \+(\d+)/i,               stats:['str','dex'] },
+  { rx:/belt of physical perfection \+(\d+)/i,          stats:['str','dex','con'] },
+  // ── Mental stat headbands ────────────────────────────────────────────────
+  { rx:/headband of alluring charisma \+(\d+)/i,        stats:['cha'] },
+  { rx:/headband of inspired wisdom \+(\d+)/i,          stats:['wis'] },
+  { rx:/headband of vast intelligence \+(\d+)/i,        stats:['int'] },
+  { rx:/headband of mental prowess \+(\d+)/i,           stats:['int','wis'] },
+  { rx:/headband of mental superiority \+(\d+)/i,       stats:['int','wis','cha'] },
+  // ── Saves (resistance bonus) ─────────────────────────────────────────────
+  { rx:/cloak of resistance \+(\d+)/i,                  stats:['fort_misc','ref_misc','will_misc'] },
+  // ── AC bonuses ───────────────────────────────────────────────────────────
+  { rx:/amulet of natural armor \+(\d+)/i,              stats:['ac_natural'] },
+  { rx:/ring of protection \+(\d+)/i,                   stats:['ac_deflect'] },
+  { rx:/bracers of armor \+(\d+)/i,                     stats:['ac_armor'] },
+  // ── Ioun stones (fixed +2 enhancement to one ability) ───────────────────
+  { rx:/pale blue rhomboid ioun stone/i,                stats:['str'],  fixedVal:2 },
+  { rx:/deep red sphere ioun stone/i,                   stats:['dex'],  fixedVal:2 },
+  { rx:/pink rhomboid ioun stone/i,                     stats:['con'],  fixedVal:2 },
+  { rx:/scarlet (?:&|and) blue sphere ioun stone/i,     stats:['int'],  fixedVal:2 },
+  { rx:/incandescent blue sphere ioun stone/i,          stats:['wis'],  fixedVal:2 },
+  { rx:/pink (?:&|and) green sphere ioun stone/i,       stats:['cha'],  fixedVal:2 },
+  { rx:/dusty rose prism ioun stone/i,                  stats:['ac_deflect'], fixedVal:1 },
+];
+
+// Human-readable labels for stat keys used in magic item pill display
+const _STAT_PILL_LABEL = {
+  str:'STR', dex:'DEX', con:'CON', int:'INT', wis:'WIS', cha:'CHA',
+  fort_misc:'Fort', ref_misc:'Ref', will_misc:'Will',
+  ac_natural:'Natural Armor', ac_deflect:'Deflection', ac_armor:'Armor',
+  ac_misc:'AC',
+};
+
 // ─── Level-gated choice types ─────────────────────────────────────────────────
 // Maps class name (lowercase) → { progressionKeyLower: { subtype, label, dbs[] } }
 // Keys match text appearing in the "Special" column of the class progression table.
@@ -8068,6 +9870,19 @@ const CLASS_LEVEL_CHOICES = {
     'revelation': { subtype: 'oracle_revelation', label: 'Revelation', fromMystery: true, dbs: [],
                     manualLevels: [1, 3, 7, 11, 15, 19] },
   },
+  // ACG classes with level choices missing from the original table
+  'skald': {
+    // Rage Powers at levels 3,6,9,12,15,18 — same pool as Barbarian
+    'rage power': { subtype: 'barbarian_rage_power', label: 'Rage Power', dbs: ['book-cr.db','book-apg.db','book-acg.db'] },
+  },
+  'bloodrager': {
+    // Bloodline Bonus Feats at levels 6,12,18 (any feat from bloodline bonus feat list)
+    'bonus feat': { isFeat: true, featType: 'any', label: 'Bloodline Bonus Feat' },
+  },
+  'hunter': {
+    // Teamwork Bonus Feats at levels 3,6,9,12,15,18
+    'bonus feat': { isFeat: true, featType: 'Teamwork', label: 'Bonus Teamwork Feat' },
+  },
   // Classes with bonus feats from progression table
   // isFeat: true → loadLevelChoiceOptions uses getFeatChoiceOptions() instead of DB subtype query
   'fighter':      { 'bonus feat': { isFeat: true, featType: 'Combat', label: 'Bonus Combat Feat' } },
@@ -8086,12 +9901,14 @@ const CLASS_LEVEL_CHOICES = {
 // ─── Class auto-granted feats (not player-chosen — just given by class features) ─
 // Maps class name (lowercase) → [ { feat, level } ]
 const CLASS_AUTO_GRANTED_FEATS = {
-  wizard:  [{ feat: 'Scribe Scroll', level: 1, featureKeyword: 'scribe scroll' }],
-  monk:    [{ feat: 'Improved Unarmed Strike', level: 1, featureKeyword: 'unarmed strike' },
-            { feat: 'Stunning Fist', level: 1, featureKeyword: 'stunning fist' }],
-  brawler: [{ feat: 'Improved Unarmed Strike', level: 1, featureKeyword: 'unarmed strike' }],
-  cavalier:[{ feat: 'Mounted Combat', level: 1, featureKeyword: 'mounted combat' }],
-  gunslinger:[{ feat: 'Exotic Weapon Proficiency (firearms)', level: 1, featureKeyword: 'gunsmith' }],
+  wizard:      [{ feat: 'Scribe Scroll', level: 1, featureKeyword: 'scribe scroll' }],
+  monk:        [{ feat: 'Improved Unarmed Strike', level: 1, featureKeyword: 'unarmed strike' },
+                { feat: 'Stunning Fist', level: 1, featureKeyword: 'stunning fist' }],
+  brawler:     [{ feat: 'Improved Unarmed Strike', level: 1, featureKeyword: 'unarmed strike' }],
+  cavalier:    [{ feat: 'Mounted Combat', level: 1, featureKeyword: 'mounted combat' }],
+  gunslinger:  [{ feat: 'Exotic Weapon Proficiency (firearms)', level: 1, featureKeyword: 'gunsmith' }],
+  // ACG — Swashbuckler gains Weapon Finesse for free at level 1 (Swashbuckler Finesse)
+  swashbuckler:[{ feat: 'Weapon Finesse', level: 1, featureKeyword: 'swashbuckler finesse' }],
 };
 
 // ── Class weapon proficiency levels ─────────────────────────────────────────
@@ -8398,7 +10215,71 @@ const CLASS_BONUS_FEAT_LEVELS = {
   warpriest:    [3,6,9,12,15,18],
   brawler:      [2,5,8,11,14,17,20],
   magus:        [5,11,17],
+  // ACG classes added in Phase 1
+  bloodrager:   [6,12,18],     // Bloodline Bonus Feats
+  hunter:       [3,6,9,12,15,18], // Bonus Teamwork Feats
 };
+
+// ─── Prestige class prerequisites ────────────────────────────────────────────
+// Each entry: { minBAB, feats, minSkillRanks:[{name,ranks}], needsSpellcasting }
+// Only checkable prereqs are listed; special/alignment/class-feature prereqs are omitted.
+const PRESTIGE_PREREQS = {
+  // CRB Prestige
+  'arcane archer':       { minBAB:6, feats:['Point-Blank Shot','Precise Shot'], needsSpellcasting:true },
+  'arcane trickster':    { feats:['Mage Hand'], needsSpellcasting:true },
+  assassin:              { minSkillRanks:[{name:'Disguise',ranks:2},{name:'Stealth',ranks:5}] },
+  'dragon disciple':     { needsSpellcasting:true },
+  duelist:               { minBAB:6, feats:['Dodge','Mobility','Weapon Finesse'] },
+  'eldritch knight':     { needsSpellcasting:true },
+  loremaster:            { minSkillRanks:[{name:'Knowledge (Arcana)',ranks:7}], needsSpellcasting:true },
+  'mystic theurge':      { minSkillRanks:[{name:'Knowledge (Arcana)',ranks:3},{name:'Knowledge (Religion)',ranks:3}], needsSpellcasting:true },
+  'pathfinder chronicler': { minSkillRanks:[{name:'Knowledge (Geography)',ranks:4},{name:'Knowledge (History)',ranks:4},{name:'Knowledge (Local)',ranks:4},{name:'Linguistics',ranks:4},{name:'Perception',ranks:5}] },
+  shadowdancer:          { feats:['Dodge','Mobility'], minSkillRanks:[{name:'Stealth',ranks:5}] },
+  // APG Prestige
+  'battle herald':       { minBAB:4, minSkillRanks:[{name:'Diplomacy',ranks:5},{name:'Intimidate',ranks:5}] },
+  'holy vindicator':     { minBAB:5, minSkillRanks:[{name:'Knowledge (Religion)',ranks:5}] },
+  'horizon walker':      { minSkillRanks:[{name:'Knowledge (Geography)',ranks:6}] },
+  'master spy':          { minSkillRanks:[{name:'Bluff',ranks:7},{name:'Disguise',ranks:7},{name:'Sense Motive',ranks:5}] },
+  'nature warden':       { minBAB:4, minSkillRanks:[{name:'Handle Animal',ranks:4},{name:'Knowledge (Nature)',ranks:4},{name:'Survival',ranks:5}] },
+  'rage prophet':        { minBAB:3 },
+  'stalwart defender':   { minBAB:7, feats:['Toughness'] },
+};
+
+// Returns array of human-readable strings describing failed prereqs, or [] if all met.
+function checkPrestigePrereqs(className) {
+  const key = (className || '').toLowerCase().trim();
+  const req = PRESTIGE_PREREQS[key];
+  if (!req) return [];
+  const failed = [];
+  // BAB check
+  if (req.minBAB !== undefined) {
+    const currentBAB = getTotalBAB();
+    if (currentBAB < req.minBAB) failed.push(`BAB +${req.minBAB} (have +${currentBAB})`);
+  }
+  // Feat checks
+  if (req.feats) {
+    const charFeatNames = new Set((character.feats || []).map(f => (f.name||f._name||'').toLowerCase()));
+    for (const f of req.feats) {
+      if (!charFeatNames.has(f.toLowerCase())) failed.push(`Feat: ${f}`);
+    }
+  }
+  // Skill rank checks
+  if (req.minSkillRanks) {
+    for (const {name, ranks} of req.minSkillRanks) {
+      const have = parseInt((character.skillRanks || {})[name] || 0);
+      if (have < ranks) failed.push(`${name} ${ranks} ranks (have ${have})`);
+    }
+  }
+  // Spellcasting check
+  if (req.needsSpellcasting) {
+    const hasSpells = (character.classes || []).some(c => {
+      const cn = (c.name || c._name || '').toLowerCase();
+      return SPELLCASTER_CLASSES.has(cn);
+    });
+    if (!hasSpells) failed.push('Spellcasting ability required');
+  }
+  return failed;
+}
 
 // ─── Racial bonus feat sources ────────────────────────────────────────────────
 const RACE_BONUS_FEATS = {
@@ -8418,7 +10299,7 @@ function calculateFeatBudget() {
 
   // Racial bonus feat
   const raceName = ((character.race?.name || character.race?._name || '')).toLowerCase().trim();
-  const racial = RACE_BONUS_FEATS[raceName] || 0;
+  const racial = RACE_BONUS_FEATS[raceKey(raceName, RACE_BONUS_FEATS)] || 0;
 
   // Class bonus feats (tracked via CLASS_LEVEL_CHOICES + CLASS_BONUS_FEAT_LEVELS)
   const classBonuses = [];
@@ -11570,22 +13451,25 @@ function wrapCharCard(category, item, cardEl, onRemove) {
           cardEl.classList.remove('char-card-equipped');
         } else {
           // Equip — unequip any other item in the same slot first
-          for (const [otherName, otherSlot] of Object.entries(character.equipped)) {
-            if (otherSlot === slot) {
-              delete character.equipped[otherName];
-              // Update that card's button if visible
-              const panels = document.querySelectorAll('.char-equip-btn.equipped');
-              panels.forEach(btn => {
-                const parentCard = btn.closest('[data-item-name]') || btn.parentElement;
-                if (btn.textContent.includes('Equipped')) {
-                  const siblingName = parentCard.dataset?.itemName;
-                  if (siblingName === otherName) {
-                    btn.className = 'char-equip-btn';
-                    btn.textContent = 'Equip';
-                    btn.closest('.char-card-equipped')?.classList.remove('char-card-equipped');
+          // Exception: weapons can be dual-wielded, so skip mutual exclusion for 'weapon' slot
+          if (slot !== 'weapon') {
+            for (const [otherName, otherSlot] of Object.entries(character.equipped)) {
+              if (otherSlot === slot) {
+                delete character.equipped[otherName];
+                // Update that card's button if visible
+                const panels = document.querySelectorAll('.char-equip-btn.equipped');
+                panels.forEach(btn => {
+                  const parentCard = btn.closest('[data-item-name]') || btn.parentElement;
+                  if (btn.textContent.includes('Equipped')) {
+                    const siblingName = parentCard.dataset?.itemName;
+                    if (siblingName === otherName) {
+                      btn.className = 'char-equip-btn';
+                      btn.textContent = 'Equip';
+                      btn.closest('.char-card-equipped')?.classList.remove('char-card-equipped');
+                    }
                   }
-                }
-              });
+                });
+              }
             }
           }
           character.equipped[name] = slot;
@@ -11870,9 +13754,8 @@ function openPointBuyCalculator() {
 
     // ── Race bonus banner ──────────────────────────────────────────────────
     const raceName = (character.race && (character.race.name || character.race._name) || '').toLowerCase();
-    const raceStatData = (typeof RACE_STAT_TABLE !== 'undefined') && RACE_STAT_TABLE[
-      Object.keys(RACE_STAT_TABLE).find(k => k.toLowerCase() === raceName) || ''
-    ];
+    const raceStatData = (typeof RACE_STAT_TABLE !== 'undefined') &&
+      RACE_STAT_TABLE[raceKey(raceName, RACE_STAT_TABLE)];
     const raceBonuses = (raceStatData && raceStatData.stats) || {};
     const hasRaceBonuses = Object.keys(raceBonuses).length > 0;
 
@@ -12011,8 +13894,36 @@ function buildStatsPanel() {
   // fx() sums race/class feature bonuses for a stat key from the bonus system
   // These are separate from the user-entered s[key] value
   function fx(statKey) { return getBonusesForStat(statKey).reduce((sum,b) => sum + (typeof b.value === 'number' ? b.value : 0), 0); }
-  function calcAC()  { return 10 + n(s.ac_armor) + n(s.ac_shield) + Math.floor((n(s.dex)-10)/2) + n(s.ac_natural) + n(s.ac_deflect) + sizeMod('ac') + n(s.ac_misc) + fx('ac_misc'); }
-  function calcTouchAC()     { return 10 + Math.floor((n(s.dex)-10)/2) + n(s.ac_deflect) + sizeMod('ac') + n(s.ac_misc) + fx('ac_misc'); }
+  // Max DEX cap: the lowest max_dex among equipped armor/shields (99 = uncapped).
+  // Fighter Armor Training increases the cap by 1–4 (only when armor is limiting DEX).
+  // Encumbrance caps DEX: medium → +3, heavy → +1.
+  function getEquippedMaxDex() {
+    let cap = 99;
+    for (const [itemName] of Object.entries(character.equipped || {})) {
+      const key = itemName.toLowerCase();
+      const entry = ARMOR_AC_TABLE[key];
+      if (entry && typeof entry.max_dex === 'number') {
+        cap = Math.min(cap, entry.max_dex);
+      } else {
+        // Fall back to DB-loaded armor map
+        const ae = armorMiscMap[key];
+        if (ae) {
+          const md = parseArmorNum(ae.maxDex);
+          if (md !== null) cap = Math.min(cap, md);
+        }
+      }
+    }
+    // Apply Armor Training: raises the Max DEX cap by 1–4 when armor is equipped
+    if (cap < 99) cap = Math.min(99, cap + getArmorTrainingBonus());
+    // Apply encumbrance DEX caps (medium: max +3, heavy: max +1) — always applies
+    const enc = getEncumbrance();
+    if (enc.load === 'medium') cap = Math.min(cap, 3);
+    else if (enc.load === 'heavy') cap = Math.min(cap, 1);
+    return cap;
+  }
+  function dexToAC() { return Math.min(Math.floor((n(s.dex)-10)/2), getEquippedMaxDex()); }
+  function calcAC()  { return 10 + n(s.ac_armor) + n(s.ac_shield) + dexToAC() + n(s.ac_natural) + n(s.ac_deflect) + sizeMod('ac') + n(s.ac_misc) + fx('ac_misc'); }
+  function calcTouchAC()     { return 10 + dexToAC() + n(s.ac_deflect) + sizeMod('ac') + n(s.ac_misc) + fx('ac_misc'); }
   function calcFlatFooted()  { return 10 + n(s.ac_armor) + n(s.ac_shield) + n(s.ac_natural) + n(s.ac_deflect) + sizeMod('ac') + n(s.ac_misc) + fx('ac_misc'); }
   function calcFort() { return getBaseSave('fort') + Math.floor((n(s.con)-10)/2) + n(s.fort_misc) + fx('fort_misc'); }
   function calcRef()  { return getBaseSave('ref')  + Math.floor((n(s.dex)-10)/2) + n(s.ref_misc) + fx('ref_misc'); }
@@ -12026,6 +13937,54 @@ function buildStatsPanel() {
   // Ranged attack: BAB + DEX mod + size mod + misc
   function calcRangedHit() { return calcBAB() + Math.floor((n(s.dex)-10)/2) + sizeMod('cmb') + n(s.ranged_misc) + fx('ranged_misc'); }
 
+  // ── Per-weapon bonus helper (Phase 8c) ───────────────────────────────────
+  // Returns {atk, dmg} deltas for a specific weapon name, derived from
+  // Weapon Focus / Greater Weapon Focus / Weapon Specialization statBonuses.
+  // Call this to adjust calcMeleeHit() for per-weapon display.
+  function getWeaponSpecificBonuses(weaponName) {
+    const wNameL = (weaponName || '').toLowerCase();
+    let atk = 0, dmg = 0;
+    for (const b of (character.statBonuses || [])) {
+      // WF bonuses have labels like "+1 attack (Weapon Focus — Longsword)"
+      const lbl = (b.label || '').toLowerCase();
+      if ((b.stat === 'melee_misc' || b.stat === 'ranged_misc') &&
+          lbl.includes(wNameL) &&
+          (lbl.includes('weapon focus') || lbl.includes('greater weapon focus'))) {
+        atk += b.value;
+      }
+      if (b.stat === 'dmg_misc' &&
+          lbl.includes(wNameL) &&
+          (lbl.includes('weapon specialization') || lbl.includes('greater weapon specialization'))) {
+        dmg += b.value;
+      }
+    }
+    return { atk, dmg };
+  }
+
+  // Total Weapon Focus melee atk already baked into calcMeleeHit() via melee_misc statBonuses.
+  // Use this to subtract the global WF total before adding per-weapon WF.
+  function _wfMeleeTotal() {
+    return (character.statBonuses || [])
+      .filter(b => b.stat === 'melee_misc' &&
+        ((b.label || '').toLowerCase().includes('weapon focus') ||
+         (b.label || '').toLowerCase().includes('greater weapon focus')))
+      .reduce((s, b) => s + b.value, 0);
+  }
+  function _wfRangedTotal() {
+    return (character.statBonuses || [])
+      .filter(b => b.stat === 'ranged_misc' &&
+        ((b.label || '').toLowerCase().includes('weapon focus') ||
+         (b.label || '').toLowerCase().includes('greater weapon focus')))
+      .reduce((s, b) => s + b.value, 0);
+  }
+  function _wsMeleeDmgTotal() {
+    return (character.statBonuses || [])
+      .filter(b => b.stat === 'dmg_misc' &&
+        ((b.label || '').toLowerCase().includes('weapon specialization') ||
+         (b.label || '').toLowerCase().includes('greater weapon specialization')))
+      .reduce((s, b) => s + b.value, 0);
+  }
+
   // ── Unified collapsible box factory ──────────────────────────────────
   // Every box: header(label+chevron) | big display value | [breakdown panel]
   // If `editable`: the big value IS the input. base/bonus pills shown inside breakdown.
@@ -12034,7 +13993,8 @@ function buildStatsPanel() {
   function makeBox(cfg) {
     const { label, key, cls, type='number', showMod=false,
             min=0, max=9999, options=[],
-            getValue, getDisplay, onCommit, breakdownFn } = cfg;
+            getValue, getDisplay, onCommit, breakdownFn,
+            lockBase=false, rowGroup=null } = cfg;
 
     const box = document.createElement('div');
     box.className = `char-stat-box ${cls}`;
@@ -12107,6 +14067,7 @@ function buildStatsPanel() {
 
     // ── Breakdown panel ────────────────────────────────────────────────
     const bdPanel = document.createElement('div');
+    bdPanel.className = '_stat-bd';
     bdPanel.style.cssText = 'display:none;width:100%;padding:0.4rem 0.5rem 0.5rem;border-top:1px solid var(--border);background:var(--bg-surface);text-align:left;';
     if (key) bdPanel.id = `stat-breakdown-${key}`;
     box.appendChild(bdPanel);
@@ -12140,6 +14101,8 @@ function buildStatsPanel() {
         lockBtn.style.color = locked ? 'var(--text-muted)' : 'var(--gold-dark)';
       }
       applyLockState(!!character.statsLocked[key]);
+      // lockBase: permanently lock the Base input and hide the lock toggle
+      if (lockBase) { applyLockState(true); lockBtn.style.display = 'none'; }
 
       lockBtn.addEventListener('click', e => {
         e.stopPropagation();
@@ -12253,6 +14216,18 @@ function buildStatsPanel() {
       if (isOpen && baseInp && !character.statsLocked[key]) {
         setTimeout(() => { baseInp.focus(); baseInp.select(); }, 40);
       }
+      // Sync all sibling boxes in the same row group
+      if (rowGroup) {
+        rowGroup.querySelectorAll('.char-stat-box').forEach(sib => {
+          if (sib === box) return;
+          const sibBd     = sib.querySelector('._stat-bd');
+          const sibBanner = sib.querySelector('.char-stat-banner');
+          const sibText   = sib.querySelector('.char-stat-banner-text');
+          if (sibBd)     sibBd.style.display = isOpen ? 'block' : 'none';
+          if (sibBanner) sibBanner.classList.toggle('open', isOpen);
+          if (sibText)   sibText.textContent = isOpen ? 'Hide' : 'Details';
+        });
+      }
     }
     banner.addEventListener('click', e => { e.stopPropagation(); toggleBreakdown(); });
 
@@ -12311,7 +14286,7 @@ function buildStatsPanel() {
   // Total AC — derived, collapsible showing components
   acRow.appendChild(makeBox({
     label:'Total AC', key:'ac_total', cls:'ac-total', type:'derived',
-    id:'derived-total-ac',
+    id:'derived-total-ac', rowGroup: acRow,
     getDisplay: () => calcAC(),
     subLabel: `Touch ${calcTouchAC()} · FF ${calcFlatFooted()}`,
     subLabelId: 'derived-ac-sub',
@@ -12321,7 +14296,7 @@ function buildStatsPanel() {
         {label:'Base',      value:10,              color:'var(--text-muted)'},
         {label:'Armor',     value:s.ac_armor,      color:'#6abf7a'},
         {label:'Shield',    value:s.ac_shield,     color:'#6abf7a'},
-        {label:'DEX mod',   value:Math.floor((s.dex-10)/2), color:'#7ab8e8'},
+        {label: (() => { const full=Math.floor((s.dex-10)/2), cap=getEquippedMaxDex(); return (full > cap) ? `DEX mod (capped ${cap})` : 'DEX mod'; })(), value: dexToAC(), color:'#7ab8e8'},
         {label:'Natural',   value:s.ac_natural,    color:'#6abf7a'},
         {label:'Deflect',   value:s.ac_deflect,    color:'#d4b84a'},
         {label:'Size',      value:sizeMod('ac'),   color:'#b87ad4'},
@@ -12335,10 +14310,42 @@ function buildStatsPanel() {
       });
     }
   }));
-  acRow.appendChild(makeBox({ label:'Armor',   key:'ac_armor',   cls:'defense', type:'number', min:0, max:20 }));
-  acRow.appendChild(makeBox({ label:'Shield',  key:'ac_shield',  cls:'defense', type:'number', min:0, max:20 }));
-  acRow.appendChild(makeBox({ label:'Natural', key:'ac_natural', cls:'defense', type:'number', min:0, max:20 }));
-  acRow.appendChild(makeBox({ label:'Deflect', key:'ac_deflect', cls:'defense', type:'number', min:-10, max:20 }));
+  // Helper used by ac_armor / ac_shield breakdownFns — shows equipped items that contribute.
+  // Uses character.equipped[item] slot value directly (already resolved by recalcEquippedAC)
+  // so we never need to re-derive slot type from DB data.
+  function _acEquipPills(el, slotType) {
+    let count = 0;
+    for (const [itemName, itemSlot] of Object.entries(character.equipped || {})) {
+      if (itemSlot !== slotType) continue; // slot already known — trust it
+      const k = itemName.toLowerCase();
+      // Get AC value: hardcoded table first, then DB map, then show name only
+      let ac = null;
+      const entry = ARMOR_AC_TABLE[k];
+      if (entry) {
+        ac = entry.ac;
+      } else {
+        const ae = armorMiscMap[k];
+        if (ae) ac = parseArmorNum(ae.armorBonus);
+      }
+      _pillRow(el, itemName, ac !== null ? `+${ac}` : 'equipped');
+      count++;
+    }
+    if (count === 0) {
+      const none = document.createElement('div');
+      none.style.cssText = 'font-family:Cinzel,serif;font-size:0.55rem;color:var(--text-muted);text-align:center;padding:0.2rem 0;';
+      none.textContent = slotType === 'armor' ? 'No armor equipped' : 'No shield equipped';
+      el.appendChild(none);
+    }
+    _fxPills(el, slotType === 'armor' ? 'ac_armor' : 'ac_shield');
+  }
+  acRow.appendChild(makeBox({ label:'Armor',   key:'ac_armor',   cls:'defense', type:'number', min:0, max:20,
+    lockBase: true, rowGroup: acRow, breakdownFn: (el) => _acEquipPills(el, 'armor') }));
+  acRow.appendChild(makeBox({ label:'Shield',  key:'ac_shield',  cls:'defense', type:'number', min:0, max:20,
+    lockBase: true, rowGroup: acRow, breakdownFn: (el) => _acEquipPills(el, 'shield') }));
+  acRow.appendChild(makeBox({ label:'Natural', key:'ac_natural', cls:'defense', type:'number', min:0, max:20,
+    lockBase: true, rowGroup: acRow }));
+  acRow.appendChild(makeBox({ label:'Deflect', key:'ac_deflect', cls:'defense', type:'number', min:-10, max:20,
+    lockBase: true, rowGroup: acRow }));
   panel.appendChild(acRow);
 
   // ── Combat ────────────────────────────────────────────────────────────────
@@ -12353,7 +14360,7 @@ function buildStatsPanel() {
   // BAB
   combatRow.appendChild(makeBox({
     label:'BAB', key:'bab_total', cls:'combat-derived', type:'derived',
-    id:'derived-bab',
+    id:'derived-bab', rowGroup: combatRow,
     getDisplay: () => fmt(calcBAB()),
     breakdownFn: (el) => {
       // Class BAB bonuses
@@ -12384,7 +14391,7 @@ function buildStatsPanel() {
   // Initiative
   combatRow.appendChild(makeBox({
     label:'Initiative', key:'init_total', cls:'combat-derived', type:'derived',
-    id:'derived-init',
+    id:'derived-init', rowGroup: combatRow,
     getDisplay: () => fmt(calcInit()),
     breakdownFn: (el) => {
       const dexMod = Math.floor((n(s.dex)-10)/2);
@@ -12402,13 +14409,95 @@ function buildStatsPanel() {
         const iel = document.getElementById('derived-init');
         if (iel) iel.textContent = fmt(calcInit());
       });
+      // Conditional initiative bonuses (not in total)
+      const initCond = getBonusesForStat('cond_init');
+      if (initCond.length > 0) {
+        const condHdr = document.createElement('div');
+        condHdr.style.cssText = 'font-size:0.6rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);margin-top:0.45rem;margin-bottom:0.18rem;padding-left:0.1rem;';
+        condHdr.textContent = 'Conditional (not in total)';
+        el.appendChild(condHdr);
+        initCond.forEach(b => {
+          const pill = document.createElement('div');
+          pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:#161622;border:1px dashed #55557a;border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;`;
+          pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:#8888aa;">${b.source}</span><span style="margin-left:auto;font-family:Cinzel,serif;font-size:0.65rem;color:#8888aa;font-style:italic;">${b.label || ''}</span>`;
+          el.appendChild(pill);
+        });
+      }
     }
   }));
+
+  // Concentration (9b) — full total: CL + casting ability mod + misc bonuses
+  const _concMiscTotal = getTotalBonus('conc_misc');
+  const _concBonuses   = getBonusesForStat('conc_misc');
+
+  // Map class → primary spellcasting ability
+  const _CLASS_CAST_AB = {
+    alchemist:'int', arcanist:'int', bard:'cha', bloodrager:'cha',
+    cleric:'wis', druid:'wis', hunter:'wis', inquisitor:'wis',
+    investigator:'int', magus:'int', oracle:'cha', paladin:'cha',
+    antipaladin:'cha', ranger:'wis', shaman:'wis', skald:'cha',
+    sorcerer:'cha', summoner:'cha', warpriest:'wis', witch:'int', wizard:'int',
+  };
+  const _concCasterClasses = (character.classes || [])
+    .filter(c => !!_CLASS_CAST_AB[(c.name || c._name || '').trim().toLowerCase()])
+    .sort((a, b) => (parseInt(b.level) || 0) - (parseInt(a.level) || 0));
+  const _concPrimary = _concCasterClasses[0];
+
+  if (_concPrimary) {
+    const _concClsName = (_concPrimary.name || _concPrimary._name || '').trim();
+    const _concAbKey   = _CLASS_CAST_AB[_concClsName.toLowerCase()];
+    const _concCL      = parseInt(_concPrimary.level) || 1;
+    const _concAbScore = ((character.stats || {})[_concAbKey] || 10);
+    const _concAbMod   = Math.floor((_concAbScore - 10) / 2);
+    const _concTotal   = _concCL + _concAbMod + _concMiscTotal;
+
+    combatRow.appendChild(makeBox({
+      label:'Concentration', key:'conc_misc', cls:'combat-derived', type:'derived',
+      id:'derived-conc', rowGroup: combatRow,
+      subLabel: `CL ${_concCL} + ${_concAbKey.toUpperCase()} ${_concAbMod >= 0 ? '+' : ''}${_concAbMod}`,
+      subLabelId: 'derived-conc-ablbl',
+      getDisplay: () => fmt(_concTotal),
+      breakdownFn: (el) => {
+        _pillRow(el, `CL (${_concClsName})`, `+${_concCL}`);
+        _pillRow(el, `${_concAbKey.toUpperCase()} modifier (score ${_concAbScore})`, fmt(_concAbMod));
+        if (_concMiscTotal !== 0) {
+          _concBonuses.forEach(b => {
+            const c = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
+            const pill = document.createElement('div');
+            pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:${c.bg};border:1px solid ${c.border};border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;`;
+            pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};">${b.source}</span><span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.72rem;color:${c.text};">${fmt(b.value)}</span>`;
+            el.appendChild(pill);
+          });
+        }
+      }
+    }));
+  } else if (_concBonuses.length > 0 || _concMiscTotal !== 0) {
+    // No casting class — show misc bonuses only with a note
+    combatRow.appendChild(makeBox({
+      label:'Concentration', key:'conc_misc', cls:'combat-derived', type:'derived',
+      id:'derived-conc', rowGroup: combatRow,
+      subLabel: 'No casting class found',
+      getDisplay: () => fmt(_concMiscTotal),
+      breakdownFn: (el) => {
+        const noteDiv = document.createElement('div');
+        noteDiv.style.cssText = 'font-size:0.6rem;color:var(--text-muted);margin-bottom:0.35rem;line-height:1.4;';
+        noteDiv.textContent = 'Add a spellcasting class to see full concentration total (CL + ability mod + these bonuses).';
+        el.appendChild(noteDiv);
+        _concBonuses.forEach(b => {
+          const c = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
+          const pill = document.createElement('div');
+          pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:${c.bg};border:1px solid ${c.border};border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;`;
+          pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};">${b.source}</span><span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.72rem;color:${c.text};">${fmt(b.value)}</span>`;
+          el.appendChild(pill);
+        });
+      }
+    }));
+  }
 
   // CMB
   combatRow.appendChild(makeBox({
     label:'CMB', key:'cmb_total', cls:'combat-derived', type:'derived',
-    id:'derived-cmb',
+    id:'derived-cmb', rowGroup: combatRow,
     getDisplay: () => fmt(calcCMB()),
     breakdownFn: (el) => {
       _pillRow(el, 'BAB', fmt(calcBAB()));
@@ -12426,7 +14515,7 @@ function buildStatsPanel() {
   // CMD
   combatRow.appendChild(makeBox({
     label:'CMD', key:'cmd_total', cls:'combat-derived', type:'derived',
-    id:'derived-cmd',
+    id:'derived-cmd', rowGroup: combatRow,
     getDisplay: () => calcCMD(),
     breakdownFn: (el) => {
       _pillRow(el, 'Base', '10');
@@ -12446,11 +14535,54 @@ function buildStatsPanel() {
   // Melee +To Hit
   combatRow.appendChild(makeBox({
     label:'Melee +Hit', key:'melee_hit_total', cls:'combat-derived', type:'derived',
-    id:'derived-melee-hit',
+    id:'derived-melee-hit', rowGroup: combatRow,
     getDisplay: () => fmt(calcMeleeHit()),
     breakdownFn: (el) => {
+      // ── Equipped melee weapons ──────────────────────────────────────────
+      const strMod = Math.floor((n(s.str)-10)/2);
+      const meleeWeps = Object.keys(character.equipped || {})
+        .filter(nm => character.equipped[nm] === 'weapon')
+        .map(nm => ({ name: nm, e: weaponMiscMap[nm.toLowerCase()] }))
+        .filter(w => w.e && !w.e.range); // no range = melee
+      if (meleeWeps.length > 0) {
+        const isDual = meleeWeps.length >= 2;
+        // Phase 8c: remove global WF total so we can re-add per-weapon WF
+        const _globalWfAtk = _wfMeleeTotal();
+        const _globalWsDmg = _wsMeleeDmgTotal();
+        const _baseHit = calcMeleeHit() - _globalWfAtk;
+        meleeWeps.forEach((w, idx) => {
+          const wc = (w.e.wc || '').toLowerCase();
+          const isOffhand = isDual && idx > 0;
+          let dmgMod = strMod;
+          if (wc.includes('two-hand')) dmgMod = Math.floor(strMod * 1.5);
+          else if (isOffhand)          dmgMod = Math.floor(strMod * 0.5);
+          const die = w.e.dmgM || '—';
+          const crit = w.e.critical ? `/${w.e.critical}` : '';
+          // Per-weapon WF/WS bonuses (only for the chosen weapon)
+          const _wBonuses = getWeaponSpecificBonuses(w.name);
+          const perWeaponHit = _baseHit + _wBonuses.atk;
+          // Rebuild dmg string with per-weapon WS dmg added to STR mod
+          const _totalDmgMod = dmgMod + _wBonuses.dmg;
+          const dmgStr = die !== '—' ? `${die}${_totalDmgMod !== 0 ? (_totalDmgMod > 0 ? '+' : '') + _totalDmgMod : ''}` : '—';
+          const label = w.name + (isOffhand ? ' (off-hand)' : '');
+          const pill = document.createElement('div');
+          pill.style.cssText = 'display:flex;align-items:center;gap:0.4rem;background:rgba(200,160,80,0.1);border:1px solid rgba(200,160,80,0.3);border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;';
+          pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.58rem;text-transform:uppercase;color:var(--gold-light);flex:1;">${label}</span><span style="font-family:Cinzel Decorative,serif;font-size:0.7rem;color:var(--gold-light);white-space:nowrap;">${fmt(perWeaponHit)} (${dmgStr}${crit})</span>`;
+          el.appendChild(pill);
+        });
+        if (isDual) {
+          const note = document.createElement('div');
+          note.style.cssText = 'font-family:Cinzel,serif;font-size:0.52rem;color:var(--text-muted);text-align:center;padding:0 0 0.3rem;';
+          note.textContent = '⚠ TWF attack penalties not included';
+          el.appendChild(note);
+        }
+        const divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid var(--border);margin:0.25rem 0;';
+        el.appendChild(divider);
+      }
+      // ── Standard hit breakdown ──────────────────────────────────────────
       _pillRow(el, 'BAB', fmt(calcBAB()));
-      _pillRow(el, 'STR modifier', fmt(Math.floor((n(s.str)-10)/2)));
+      _pillRow(el, 'STR modifier', fmt(strMod));
       const sm = sizeMod('cmb');
       if (sm !== 0) _pillRow(el, 'Size (' + s.size + ')', fmt(sm));
       _fxPills(el, 'melee_misc');
@@ -12464,9 +14596,34 @@ function buildStatsPanel() {
   // Ranged +To Hit
   combatRow.appendChild(makeBox({
     label:'Ranged +Hit', key:'ranged_hit_total', cls:'combat-derived', type:'derived',
-    id:'derived-ranged-hit',
+    id:'derived-ranged-hit', rowGroup: combatRow,
     getDisplay: () => fmt(calcRangedHit()),
     breakdownFn: (el) => {
+      // ── Equipped ranged weapons ─────────────────────────────────────────
+      const rangedWeps = Object.keys(character.equipped || {})
+        .filter(nm => character.equipped[nm] === 'weapon')
+        .map(nm => ({ name: nm, e: weaponMiscMap[nm.toLowerCase()] }))
+        .filter(w => w.e && w.e.range); // has range = ranged
+      if (rangedWeps.length > 0) {
+        // Phase 8c: subtract global ranged WF total so each weapon gets per-weapon WF
+        const _globalWfRangedAtk = _wfRangedTotal();
+        const _baseRangedHit = calcRangedHit() - _globalWfRangedAtk;
+        rangedWeps.forEach(w => {
+          const die = w.e.dmgM || '—';
+          const crit = w.e.critical ? `/${w.e.critical}` : '';
+          const rangeStr = w.e.range ? ` · ${w.e.range}` : '';
+          const _wBonuses = getWeaponSpecificBonuses(w.name);
+          const perWeaponRangedHit = _baseRangedHit + _wBonuses.atk;
+          const pill = document.createElement('div');
+          pill.style.cssText = 'display:flex;align-items:center;gap:0.4rem;background:rgba(100,180,240,0.1);border:1px solid rgba(100,180,240,0.3);border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;';
+          pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.58rem;text-transform:uppercase;color:#7ab8e8;flex:1;">${w.name}</span><span style="font-family:Cinzel Decorative,serif;font-size:0.7rem;color:#7ab8e8;white-space:nowrap;">${fmt(perWeaponRangedHit)} (${die}${crit})${rangeStr}</span>`;
+          el.appendChild(pill);
+        });
+        const divider = document.createElement('div');
+        divider.style.cssText = 'border-top:1px solid var(--border);margin:0.25rem 0;';
+        el.appendChild(divider);
+      }
+      // ── Standard hit breakdown ──────────────────────────────────────────
       _pillRow(el, 'BAB', fmt(calcBAB()));
       _pillRow(el, 'DEX modifier', fmt(Math.floor((n(s.dex)-10)/2)));
       const sm = sizeMod('cmb');
@@ -12480,6 +14637,51 @@ function buildStatsPanel() {
   }));
 
   panel.appendChild(combatRow);
+
+  // ── Combat Options (Fighting Defensively / Total Defense) ────────────────
+  {
+    const _combatOptsLabel = document.createElement('div');
+    _combatOptsLabel.style.cssText = 'font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);margin:0.65rem 0 0.3rem;';
+    _combatOptsLabel.textContent = 'Combat Options';
+    panel.appendChild(_combatOptsLabel);
+
+    const _combatOptsRow = document.createElement('div');
+    _combatOptsRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:0.5rem;';
+
+    const _combatOnlyKeys = Object.entries(TOGGLEABLE_FEATS)
+      .filter(([, def]) => !def.isFeat);
+
+    for (const [key, def] of _combatOnlyKeys) {
+      const _isOn = !!(character.featToggles || {})[key];
+      const btn = document.createElement('button');
+      btn.textContent = def.label + (_isOn ? ' ✓' : '');
+      btn.style.cssText = `font-family:Cinzel,serif;font-size:0.65rem;padding:0.28rem 0.65rem;border-radius:5px;cursor:pointer;transition:background 0.15s,border-color 0.15s;` +
+        (_isOn
+          ? 'background:rgba(100,200,120,0.18);border:1px solid rgba(100,200,120,0.5);color:#80c890;'
+          : 'background:transparent;border:1px solid rgba(150,150,150,0.35);color:var(--text-muted);');
+      btn.title = def.description || def.label;
+      btn.onclick = () => {
+        if (!character.featToggles) character.featToggles = {};
+        character.featToggles[key] = !character.featToggles[key];
+        // Mutual exclusivity: Total Defense and Fighting Defensively can't both be on
+        if (key === 'total defense' && character.featToggles[key])
+          character.featToggles['fighting defensively'] = false;
+        if (key === 'fighting defensively' && character.featToggles[key])
+          character.featToggles['total defense'] = false;
+        recomputeStatBonuses();
+        // Update button state immediately without collapsing any open breakdown panel
+        btn.textContent = def.label + (character.featToggles[key] ? ' ✓' : '');
+        btn.style.cssText = `font-family:Cinzel,serif;font-size:0.65rem;padding:0.28rem 0.65rem;border-radius:5px;cursor:pointer;transition:background 0.15s,border-color 0.15s;` +
+          (character.featToggles[key]
+            ? 'background:rgba(100,200,120,0.18);border:1px solid rgba(100,200,120,0.5);color:#80c890;'
+            : 'background:transparent;border:1px solid rgba(150,150,150,0.35);color:var(--text-muted);');
+        if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
+      };
+      _combatOptsRow.appendChild(btn);
+    }
+
+    panel.appendChild(_combatOptsRow);
+  }
 
   // ── Helper: simple breakdown pill row ─────────────────────────────────────
   function _pillRow(container, label, valueStr) {
@@ -12510,13 +14712,46 @@ function buildStatsPanel() {
   }
 
   // ── Helper: render race/class feature bonus pills for a stat key ──────────
+  // Pills from toggleable sources (Power Attack, Combat Expertise, etc.) are
+  // rendered with a ✕ indicator and can be clicked to deactivate the toggle.
   function _fxPills(container, statKey) {
     const fxBonuses = getBonusesForStat(statKey);
     fxBonuses.forEach(b => {
       const c = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
       const pill = document.createElement('div');
-      pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:${c.bg};border:1px solid ${c.border};border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;`;
-      pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};">${b.source}</span><span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.72rem;color:${c.text};">${fmt(b.value)}</span>`;
+
+      // Check if this bonus comes from a toggleable source
+      const _tglKey = Object.keys(TOGGLEABLE_FEATS).find(
+        k => TOGGLEABLE_FEATS[k].label === b.source
+      );
+      const _isToggleable = !!_tglKey;
+
+      pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:${c.bg};border:1px solid ${c.border};border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;` +
+        (_isToggleable ? 'cursor:pointer;' : '');
+      pill.title = _isToggleable ? `Click to deactivate ${b.source}` : '';
+
+      const labelEl = document.createElement('span');
+      labelEl.style.cssText = `font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};`;
+      labelEl.textContent = b.source + (_isToggleable ? ' ✕' : '');
+
+      const valEl = document.createElement('span');
+      valEl.style.cssText = `margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.72rem;color:${c.text};`;
+      valEl.textContent = fmt(b.value);
+
+      pill.appendChild(labelEl);
+      pill.appendChild(valEl);
+
+      if (_isToggleable) {
+        pill.addEventListener('click', e => {
+          e.stopPropagation();
+          if (!character.featToggles) character.featToggles = {};
+          character.featToggles[_tglKey] = false;
+          recomputeStatBonuses();
+          // Refresh stats without collapsing the breakdown panel
+          if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
+        });
+      }
+
       container.appendChild(pill);
     });
   }
@@ -12568,6 +14803,23 @@ function buildStatsPanel() {
           pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};">${b.source}</span><span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.72rem;color:${c.text};">${fmt(b.value)}</span>`;
           el.appendChild(pill);
         });
+
+        // Conditional bonuses for this save — shown as notes, NOT included in the save total
+        // Keys follow pattern: cond_fort / cond_ref / cond_will
+        const _condKey = 'cond_' + miscKey.split('_')[0]; // e.g. 'cond_fort'
+        const condBonuses = getBonusesForStat(_condKey);
+        if (condBonuses.length > 0) {
+          const condHdr = document.createElement('div');
+          condHdr.style.cssText = 'font-size:0.6rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);margin-top:0.45rem;margin-bottom:0.18rem;padding-left:0.1rem;';
+          condHdr.textContent = 'Conditional (not in total)';
+          el.appendChild(condHdr);
+          condBonuses.forEach(b => {
+            const pill = document.createElement('div');
+            pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:#161622;border:1px dashed #55557a;border-radius:5px;padding:0.2rem 0.5rem;margin-bottom:0.2rem;`;
+            pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:#8888aa;">${b.source}</span><span style="margin-left:auto;font-family:Cinzel,serif;font-size:0.65rem;color:#8888aa;font-style:italic;">${b.label}</span>`;
+            el.appendChild(pill);
+          });
+        }
 
         // Misc input row
         _miscInput(el, miscKey, () => {
@@ -13738,7 +15990,7 @@ function getSkillBonuses() {
   // 2. Racial skill bonuses (base race)
   if (character.race) {
     const raceName = character.race.name || character.race._name || '';
-    const raceEntries = RACE_SKILL_BONUSES[raceName] || RACE_SKILL_BONUSES[raceName.replace(/s$/,'')];
+    const raceEntries = RACE_SKILL_BONUSES[raceKey(raceName, RACE_SKILL_BONUSES)];
     if (raceEntries) {
       for (const entry of raceEntries) {
         for (const sk of entry.skills) {
@@ -13796,6 +16048,17 @@ function getSkillBonuses() {
         }
 
         if (matched.length > 0) {
+          // If trailingConditional is just "and [AnotherSkillName] checks", it's part of the
+          // multi-skill list (e.g. "Diplomacy and Perception checks"), NOT a real conditional.
+          // Null it out so the unconditional-positive guard in 3b can filter it correctly.
+          if (trailingConditional) {
+            const tcTest = trailingConditional.toLowerCase()
+              .replace(/^and\s+/, '').replace(/\s*checks?\s*$/, '').trim();
+            if (tcTest && _skillNames.some(sk =>
+                tcTest === sk.toLowerCase() || tcTest.startsWith(sk.toLowerCase() + ' '))) {
+              trailingConditional = null;
+            }
+          }
           const finalCond = trailingConditional && trailingConditional.length > 2
             ? trailingConditional : null;
           for (const skName of matched) results.push({ skName, value: val, conditional: finalCond });
@@ -13887,7 +16150,193 @@ function getSkillBonuses() {
     }
   }
 
-  // 4. Size bonuses to Stealth and Fly
+  // 4. Feat skill bonuses
+  for (const feat of (character.feats || [])) {
+    const featName = (feat.name || feat._name || '').trim();
+    const featKey  = featName.toLowerCase();
+
+    // ── Skill Focus ────────────────────────────────────────────────────────────
+    // +3 to chosen skill (+6 if 10+ ranks). Handles two storage forms:
+    //   1. Old / DB form:  "Skill Focus (Perception)"  — skill embedded in feat name
+    //   2. New / choice form: "Skill Focus"            — skill in character.featChoices
+    const sfMatch = featKey.match(/^skill focus \((.+)\)$/) || (featKey === 'skill focus' ? ['', (character.featChoices || {})[featName] || ''] : null);
+    if (sfMatch) {
+      const focusedRaw = sfMatch[1].trim();
+      if (focusedRaw) {
+        const canonical = PF1E_SKILLS.find(s => s.name.toLowerCase() === focusedRaw.toLowerCase());
+        if (canonical) {
+          const ranks = parseInt((character.skillRanks || {})[canonical.name] || 0);
+          const bonus = ranks >= 10 ? 6 : 3;
+          add(canonical.name, { value: bonus, source: featName, sourceType: 'feat', conditional: null });
+        }
+      }
+    }
+
+    // ── Other feat skill bonuses from FEAT_SKILL_EFFECTS ─────────────────────
+    const skillFx = FEAT_SKILL_EFFECTS[featKey];
+    if (skillFx) {
+      for (const fx of skillFx) {
+        if (!fx.value) continue;
+        add(fx.skill, { value: fx.value, source: featName, sourceType: 'feat', conditional: fx.conditional || null });
+      }
+    }
+  }
+
+  // 5. Trait skill bonuses — parsed from trait description text
+  // Catches "+N trait bonus on/to [Skill] checks" patterns in any trait description.
+  // Class-skill grants ("X is a class skill") are handled in getCharacterClassSkills().
+  for (const trait of (character.traits || [])) {
+    const traitName = (trait.name || trait._name || '').trim();
+    // 8a fix: central_index.description is NULL for traits — fall back to traitBodyMap
+    const rawText   = (trait.description || trait.benefit || traitBodyMap[traitName.toLowerCase()] || '');
+    // Strip HTML and decode common entities
+    const text = rawText
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&ndash;|&#8211;/gi, '\u2013')
+      .replace(/&mdash;|&#8212;/gi, '\u2014')
+      .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+      .replace(/&[\w#]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+
+    // 5a. Choice-based trait bonuses (e.g. "Vagabond Child": player chose a skill)
+    const _choiceData = parseTraitSkillChoice(rawText);
+    if (_choiceData && _choiceData.bonus > 0) {
+      const chosenSkill = (character.traitSkillChoices || {})[traitName];
+      if (chosenSkill) {
+        const canon = PF1E_SKILLS.find(s => s.name.toLowerCase() === chosenSkill.toLowerCase());
+        if (canon) {
+          add(canon.name, { value: _choiceData.bonus, source: traitName, sourceType: 'trait', conditional: null });
+        }
+      }
+      continue; // Don't also run the generic parser on choice-based traits
+    }
+
+    // 5b. Fixed (non-choice) trait bonuses
+    // Match "+N [type] bonus on/to [Skill] checks" — catches all wording variants:
+    //   "+N trait bonus on Perception"   (explicit "trait" keyword)
+    //   "+N bonus on Acrobatics"         (no type keyword — Acrobat, Reckless, etc.)
+    //   "+N luck bonus on Bluff"         (named bonus type — one word)
+    // Also catches subcategory patterns like "+N bonus on Craft (Alchemy) checks".
+    // Stops at [.,;] or " and " so multi-skill traits (Beast Bond) capture the first skill,
+    // then the "and" continuation block below picks up additional skills.
+    for (const m of text.matchAll(/\+(\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+(?:all\s+)?(.+?)(?:\s+checks?)?(?=[.,;]|\s+and\s+|$)/gi)) {
+      const val = parseInt(m[1]);
+      if (!val || val <= 0) continue;
+      const rawSkill = m[2].trim();
+      const rawSkillL = rawSkill.toLowerCase();
+
+      // ── 5b-sub helper: detect & register "Craft (Alchemy)"-style subcategory ──
+      const _addSubcatSkill = (rawSk, v) => {
+        const sm = rawSk.trim().match(/^(Craft|Profession|Perform)\s*\(([^)]+)\)/i);
+        if (!sm) return false;
+        const pn = sm[1].charAt(0).toUpperCase() + sm[1].slice(1).toLowerCase();
+        const sn = sm[2].trim().charAt(0).toUpperCase() + sm[2].trim().slice(1);
+        const fn = `${pn} (${sn})`;
+        if (!character.customSkillLines) character.customSkillLines = [];
+        if (!character.customSkillLines.includes(fn)) character.customSkillLines.push(fn);
+        add(fn, { value: v, source: traitName, sourceType: 'trait', conditional: null });
+        return true;
+      };
+
+      if (_addSubcatSkill(rawSkill, val)) {
+        // ── Also handle "checks and [OtherSubcat]" continuation in the same pattern
+        // e.g. "Craft (Alchemy) checks and Profession (Brewer) checks"
+        const _afterSub = text.slice(m.index + m[0].length);
+        const _andSub = _afterSub.match(/^\s*checks?\s+and\s+(?:on\s+)?(.+?)(?:\s+checks?)?(?=[.,;]|$)/i)
+                     || _afterSub.match(/^\s+and\s+(?:on\s+)?(.+?)(?:\s+checks?)?(?=[.,;]|$)/i);
+        if (_andSub) _addSubcatSkill(_andSub[1].trim(), val);
+        continue;
+      }
+
+      // ── Standard skill match ──────────────────────────────────────────────────
+      // Match against known PF1e skill names (prefix or full match)
+      const canonical = PF1E_SKILLS.find(s => {
+        const sl = s.name.toLowerCase();
+        return sl === rawSkillL || rawSkillL.startsWith(sl) || sl.startsWith(rawSkillL);
+      });
+      if (canonical) {
+        // Detect conditional: if rawSkill has text beyond the skill name (+ optional "checks"),
+        // the bonus applies only under specific circumstances (e.g. Ambitious: "Diplomacy checks
+        // made to influence creatures with at least 5 more HD").
+        const slL = canonical.name.toLowerCase();
+        const afterSkill = rawSkill.slice(slL.length).trim();
+        // "checks" alone is NOT a condition — it's just the standard phrasing
+        const isConditional = afterSkill && !/^checks?\s*$/.test(afterSkill);
+        let conditionalNote = null;
+        if (isConditional) {
+          // Strip leading "checks " from the qualifier to form a readable note
+          conditionalNote = afterSkill.replace(/^checks?\s+/i, '').trim();
+          if (!conditionalNote) conditionalNote = afterSkill;
+        }
+        add(canonical.name, { value: val, source: traitName, sourceType: 'trait', conditional: conditionalNote });
+      }
+      // Handle "and [Skill] checks" continuation — both "and X" and "checks and X" forms
+      // e.g. Beast Bond: "+1 bonus on Handle Animal checks and Ride checks"
+      // e.g. Brewmaster: "+1 bonus on Craft (Alchemy) checks and Profession (Brewer) checks"
+      const afterMatch = text.slice(m.index + m[0].length);
+      const andM = afterMatch.match(/^\s*checks?\s+and\s+(?:on\s+)?(.+?)(?:\s+checks?)?(?=[.,;]|$)/i)
+                || afterMatch.match(/^\s+and\s+(?:on\s+)?(.+?)(?:\s+checks?)?(?=[.,;]|$)/i);
+      if (andM && val > 0) {
+        const andSkillRaw = andM[1].trim();
+        // Try subcategory detection first, then fall back to standard skill
+        if (!_addSubcatSkill(andSkillRaw, val)) {
+          const andSkill = andSkillRaw.toLowerCase();
+          const andCanonical = PF1E_SKILLS.find(s => {
+            const sl = s.name.toLowerCase();
+            return sl === andSkill || andSkill.startsWith(sl) || sl.startsWith(andSkill);
+          });
+          if (andCanonical) {
+            const andSlL = andCanonical.name.toLowerCase();
+            const andAfterSkill = andSkill.slice(andSlL.length).trim();
+            const andIsConditional = andAfterSkill && !/^checks?\s*$/.test(andAfterSkill);
+            const andNote = andIsConditional ? andAfterSkill.replace(/^checks?\s+/i, '').trim() : null;
+            add(andCanonical.name, { value: val, source: traitName, sourceType: 'trait', conditional: andNote });
+          }
+        }
+      }
+    }
+  }
+
+  // 5c. Trait secondary effects — penalty-reduction conditional notes
+  // Detects patterns like "−2 penalty instead of −5 on accelerated climb" and adds
+  // a value:0 informational entry to the relevant skill's breakdown.
+  // Uses the DASH character class (–, —, −, -) for robustness.
+  const _TRAIT_DASH = '[\\u2013\\u2014\\u2212\\-]';
+  const _penaltyRedRx = new RegExp(
+    `(?:only\\s+a?|take\\s+(?:only\\s+)?a?)\\s*${_TRAIT_DASH}\\s*(\\d+)\\s+penalty\\s+` +
+    `instead\\s+of\\s+(?:the\\s+)?(?:normal\\s+)?${_TRAIT_DASH}\\s*(\\d+)\\s+penalty\\s+` +
+    `(?:when|while|for|on|to)\\s+(?:using\\s+the\\s+)?(.+?)(?:\\s+skill)?\\s+` +
+    `(?:to\\s+|for\\s+)?(.+?)(?:\\.|$)`, 'gi'
+  );
+  for (const trait of (character.traits || [])) {
+    const traitName2 = (trait.name || trait._name || '').trim();
+    // 8a fix: use traitBodyMap fallback (same as sections 5a/5b)
+    const rawText2   = (trait.description || trait.benefit || traitBodyMap[traitName2.toLowerCase()] || '');
+    const text2 = rawText2
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&ndash;|&#8211;/gi, '\u2013').replace(/&mdash;|&#8212;/gi, '\u2014')
+      .replace(/&minus;|&#8722;/gi, '\u2212').replace(/&amp;/gi, '&')
+      .replace(/&[\w#]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+    if (!text2) continue;
+    for (const m of text2.matchAll(_penaltyRedRx)) {
+      const newPenalty = parseInt(m[1]);
+      const oldPenalty = parseInt(m[2]);
+      const skillRaw   = m[3].trim();
+      const activity   = m[4].trim();
+      // Find matching skill
+      const canonical2 = PF1E_SKILLS.find(s => {
+        const sl = s.name.toLowerCase();
+        const sr = skillRaw.toLowerCase();
+        return sl === sr || sr.startsWith(sl) || sl.startsWith(sr);
+      });
+      if (canonical2) {
+        const note = `\u2212${newPenalty} penalty (instead of \u2212${oldPenalty}) on ${activity}`;
+        add(canonical2.name, { value: 0, source: traitName2, sourceType: 'trait', conditional: note });
+      }
+    }
+  }
+
+  // 6. Size bonuses to Stealth and Fly
   const _charSize = (character.stats && character.stats.size) || (character.statsBase && character.statsBase.size) || 'Medium';
   const _stealthSizeMod = SIZE_MOD_STEALTH[_charSize];
   if (typeof _stealthSizeMod === 'number' && _stealthSizeMod !== 0) {
@@ -13898,6 +16347,7 @@ function getSkillBonuses() {
     add('Fly', { value: _flySizeMod, source: `Size (${_charSize})`, sourceType: 'size' });
   }
 
+  _cachedSkillBonuses = bonuses; // cache for trait card pill display (Phase 8d)
   return bonuses;
 }
 
@@ -14019,6 +16469,38 @@ function getCharacterClassSkills() {
     liveRemovals.forEach(s => { skills.delete(s); sources.delete(s); });
   }
 
+  // ── Trait-granted class skills (parsed from trait description text) ──────────
+  // Many traits grant "X is a class skill for you" (combat, regional, social, etc.)
+  // We parse description text rather than hardcoding hundreds of trait names.
+  for (const trait of (character.traits || [])) {
+    const traitName = (trait.name || trait._name || '').trim();
+    // 8a fix: central_index.description is NULL for traits — fall back to traitBodyMap
+    const rawText   = (trait.description || trait.benefit || traitBodyMap[traitName.toLowerCase()] || '');
+    const text = rawText.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+    // For choice-based traits (e.g. "Beast Bond", "Vagabond Child"), apply the chosen skill
+    const _choiceData = parseTraitSkillChoice(rawText);
+    if (_choiceData && _choiceData.classSkill) {
+      const chosenSkill = (character.traitSkillChoices || {})[traitName];
+      if (chosenSkill) {
+        const canon = PF1E_SKILLS.find(s => s.name.toLowerCase() === chosenSkill.toLowerCase());
+        if (canon) _add(canon.name, traitName);
+      }
+      continue; // Don't also run the generic parser on choice-based traits
+    }
+
+    // Match "[Skill name] is a class skill" or "[Skill name] is always a class skill"
+    const csRx = /([\w\s()\-/]+?)\s+is\s+(?:always\s+)?a\s+class\s+skill\b/gi;
+    for (const m of text.matchAll(csRx)) {
+      const rawSkill    = m[1].trim().toLowerCase();
+      const canonical   = PF1E_SKILLS.find(s => {
+        const sl = s.name.toLowerCase();
+        return sl === rawSkill || rawSkill.endsWith(sl) || sl.endsWith(rawSkill);
+      });
+      if (canonical) _add(canonical.name, traitName);
+    }
+  }
+
   return { skills, sources, specialNotes };
 }
 
@@ -14033,6 +16515,8 @@ function calcSkillAvailableRanks() {
     const perLvl  = Math.max(1, base + intMod + humanBonus);   // minimum 1 per level
     avail        += perLvl * (parseInt(cls.level) || 1);
   }
+  // Favored class: each 'skill' choice adds 1 bonus rank
+  avail += (character.favoredClassBonuses?.skill || 0);
   return avail;
 }
 
@@ -14042,7 +16526,17 @@ function recalcSkillTotal(skillName, abilMod, isClassSkill, appliedBonus) {
   const ranks   = parseInt(character.skillRanks[skillName] || 0);
   const misc    = parseInt(character.skillMisc[skillName]  || 0);
   const csBonus = (isClassSkill && ranks > 0) ? 3 : 0;
-  return ranks + abilMod + csBonus + misc + (appliedBonus || 0);
+  const skDef   = PF1E_SKILLS.find(s => s.name === skillName);
+  const acp     = (skDef && skDef.acp) ? getEquippedACP() : 0;
+  // Check for ability score override (e.g. Bruising Intellect: Intimidate uses INT)
+  const _overrideAbil = (character.skillAbilityOverrides || {})[skillName];
+  let effectiveAbilMod = abilMod;
+  if (_overrideAbil) {
+    const _overrideScore = (character.stats || {})[_overrideAbil] || 10;
+    const _overrideFx    = (typeof getTotalBonus === 'function') ? getTotalBonus(_overrideAbil) : 0;
+    effectiveAbilMod = Math.floor((_overrideScore + _overrideFx - 10) / 2);
+  }
+  return ranks + effectiveAbilMod + csBonus + misc + (appliedBonus || 0) + acp;
 }
 
 function refreshSkillTracker() {
@@ -14130,6 +16624,52 @@ function updateSkillMiscBonus(input, skillName, abilMod, isClassSkill, appliedBo
   const totalEl = document.getElementById('sk-total-' + slugify(skillName));
   const fmtMod  = n => n >= 0 ? `+${n}` : `${n}`;
   if (totalEl) { totalEl.textContent = fmtMod(total); totalEl.style.color = total < 0 ? '#e05555' : total !== 0 ? 'var(--gold-light)' : 'var(--text-muted)'; }
+}
+
+// ── Custom Craft/Profession/Perform skill line helpers (Phase 9e) ─────────────
+// Prompts the user for a subcategory name, then adds "Parent (Subcategory)" to
+// character.customSkillLines and re-renders the skills section.
+function addCustomSkillLine(parentName) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:2200;display:flex;align-items:center;justify-content:center;';
+  const modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:1.4rem 1.6rem;min-width:320px;max-width:420px;font-family:Cinzel,serif;';
+  modal.innerHTML = `
+    <div style="font-size:0.82rem;color:var(--gold);margin-bottom:0.7rem;text-transform:uppercase;letter-spacing:0.08em;">${parentName} — Add Subcategory</div>
+    <div style="font-size:0.72rem;color:var(--text-secondary);margin-bottom:0.8rem;">Enter the subcategory name (e.g. "Alchemy", "Weaponsmithing", "Brewer"):</div>
+    <input id="_custom-skill-input" type="text" placeholder="Subcategory name…"
+      style="width:100%;box-sizing:border-box;background:var(--bg-surface);border:1px solid var(--border);border-radius:4px;color:var(--text-primary);font-family:inherit;font-size:0.82rem;padding:0.35rem 0.55rem;margin-bottom:0.85rem;">
+    <div style="display:flex;gap:0.6rem;justify-content:flex-end;">
+      <button onclick="this.closest('.csl-overlay').remove();" style="font-family:Cinzel,serif;font-size:0.7rem;padding:0.3rem 0.8rem;background:transparent;border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);cursor:pointer;">Cancel</button>
+      <button id="_custom-skill-confirm" style="font-family:Cinzel,serif;font-size:0.7rem;padding:0.3rem 0.85rem;background:rgba(100,200,120,0.15);border:1px solid rgba(100,200,120,0.3);border-radius:4px;color:#80c890;cursor:pointer;">Add Skill Line</button>
+    </div>`;
+  overlay.className = 'csl-overlay';
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  const input = overlay.querySelector('#_custom-skill-input');
+  const confirm = overlay.querySelector('#_custom-skill-confirm');
+  input.focus();
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') confirm.click(); if (e.key === 'Escape') overlay.remove(); });
+  confirm.addEventListener('click', () => {
+    const sub = input.value.trim();
+    if (!sub) return;
+    const fullName = `${parentName} (${sub.charAt(0).toUpperCase() + sub.slice(1)})`;
+    if (!character.customSkillLines) character.customSkillLines = [];
+    if (!character.customSkillLines.includes(fullName)) {
+      character.customSkillLines.push(fullName);
+      renderCharacter();
+    }
+    overlay.remove();
+  });
+}
+
+// Remove a custom skill line from character.customSkillLines
+function removeCustomSkillLine(fullName) {
+  if (!character.customSkillLines) return;
+  character.customSkillLines = character.customSkillLines.filter(s => s !== fullName);
+  if (character.skillRanks) delete character.skillRanks[fullName];
+  if (character.skillMisc)  delete character.skillMisc[fullName];
+  renderCharacter();
 }
 
 function buildSkillsSection() {
@@ -14262,7 +16802,10 @@ function buildSkillsSection() {
     const isCS           = classSkills.has(sk.name);
     const ranks          = Math.max(0, parseInt(character.skillRanks[sk.name] || 0));
     const misc           = parseInt(character.skillMisc[sk.name] || 0);
-    const am             = abilMod(sk.ability);
+    // Check ability score override (e.g. Bruising Intellect: Intimidate uses INT)
+    const _skAbilOverride = (character.skillAbilityOverrides || {})[sk.name];
+    const _skAbilKey      = _skAbilOverride || sk.ability;
+    const am             = abilMod(_skAbilKey);
     const csB            = (isCS && ranks > 0) ? 3 : 0;
     const skSlug         = slugify(sk.name);
     const rowBg          = idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.025)';
@@ -14273,7 +16816,8 @@ function buildSkillsSection() {
     const unconditional  = skillBonuses.filter(b => !b.conditional);
     const conditional    = skillBonuses.filter(b => !!b.conditional);
     const appliedBonus   = unconditional.reduce((s, b) => s + b.value, 0);
-    const total          = ranks + am + csB + misc + appliedBonus;
+    const acpPenalty     = sk.acp ? getEquippedACP() : 0;
+    const total          = ranks + am + csB + misc + appliedBonus + acpPenalty;
     const hasSpecial     = conditional.length > 0;
     const hasBonuses     = skillBonuses.length > 0;
 
@@ -14284,13 +16828,14 @@ function buildSkillsSection() {
     const badges = [
       (sk.trainedOnly && !isUntrained) ? `<span title="Trained only" style="font-size:0.6rem;color:var(--text-muted);background:rgba(255,255,255,0.07);border-radius:2px;padding:0 3px;margin-left:3px;">T</span>` : '',
       (sk.trainedOnly && isUntrained)  ? `<span title="Untrained use granted by class feature" style="font-size:0.6rem;color:#4cde6e;background:rgba(76,222,110,0.12);border:1px solid rgba(76,222,110,0.3);border-radius:2px;padding:0 3px;margin-left:3px;font-family:Cinzel,serif;letter-spacing:0.04em;">UNTRAINED</span>` : '',
-      sk.acp         ? `<span title="Armor check penalty" style="font-size:0.6rem;color:#c4aa44;margin-left:2px;">⚠</span>` : '',
+      sk.acp         ? `<span title="Armor check penalty${acpPenalty < 0 ? ': ' + acpPenalty + ' from equipped armor' : ' (no armor equipped)'}" style="font-size:0.6rem;color:${acpPenalty < 0 ? '#e07040' : '#c4aa44'};margin-left:2px;">⚠${acpPenalty < 0 ? acpPenalty : ''}</span>` : '',
       hasSpecial     ? `<span title="Conditional bonuses — click for details" style="font-size:0.55rem;color:#f0c040;background:rgba(240,192,64,0.15);border:1px solid rgba(240,192,64,0.3);border-radius:2px;padding:0 4px;margin-left:4px;font-family:Cinzel,serif;letter-spacing:0.06em;">SPECIAL</span>` : '',
       hasSkNotes     ? `<span title="${skNotes.map(n=>n.source).join(', ')} — click for notes" style="font-size:0.55rem;color:#7bbaff;background:rgba(123,186,255,0.12);border:1px solid rgba(123,186,255,0.3);border-radius:2px;padding:0 4px;margin-left:4px;font-family:Cinzel,serif;letter-spacing:0.06em;">NOTE</span>` : '',
+      _skAbilOverride ? `<span title="Ability score substitution — click for details" style="font-size:0.55rem;color:#b090d0;background:rgba(176,144,208,0.12);border:1px solid rgba(176,144,208,0.3);border-radius:2px;padding:0 4px;margin-left:4px;font-family:Cinzel,serif;letter-spacing:0.06em;">OVERRIDE</span>` : '',
     ].join('');
 
-    // Main row
-    const _skExpandable = hasBonuses || hasSkNotes;
+    // Main row — expandable if has bonuses, notes, OR ability override
+    const _skExpandable = hasBonuses || hasSkNotes || !!_skAbilOverride;
     const tr = document.createElement('tr');
     tr.style.cssText = `background:${rowBg};${_skExpandable ? 'cursor:pointer;' : ''}`;
     tr.setAttribute('data-skill', sk.name);
@@ -14313,7 +16858,7 @@ function buildSkillsSection() {
     tr.innerHTML = `
       <td style="padding:0.3rem 0.5rem;color:${isCS ? 'var(--text-primary)' : 'var(--text-secondary)'};font-weight:${isCS ? '500' : '400'};">
         ${_skExpandable ? `<span class="sk-expand-arr" style="font-size:0.6rem;color:var(--text-muted);margin-right:4px;display:inline-block;width:8px;">${isAllExpanded ? '▾' : '▸'}</span>` : `<span style="display:inline-block;width:12px;"></span>`}${sk.name}${badges}
-        <span style="font-size:0.68rem;color:var(--text-muted);margin-left:0.25rem;">(${sk.ability.toUpperCase()})</span>
+        <span style="font-size:0.68rem;color:${_skAbilOverride ? '#b090d0' : 'var(--text-muted)'};margin-left:0.25rem;">(${_skAbilKey.toUpperCase()}${_skAbilOverride ? ' ★' : ''})</span>
       </td>
       <td style="text-align:center;padding:0.25rem;vertical-align:middle;">
         ${isCS
@@ -14397,14 +16942,170 @@ function buildSkillsSection() {
           </div>`
         ).join('');
       }
+      // ── Ability override info (9c) ────────────────────────────────────────────
+      if (_skAbilOverride) {
+        // Reverse-look up the trait responsible for this override
+        const _overrideEntry = Object.entries(TRAIT_ABILITY_OVERRIDES || {})
+          .find(([, v]) => v.skill.toLowerCase() === sk.name.toLowerCase() && v.ability === _skAbilOverride);
+        const _overrideTraitName = _overrideEntry
+          ? _overrideEntry[0].replace(/\b\w/g, c => c.toUpperCase())
+          : null;
+        // Also check if any active character trait name loosely matches (covers Wisdom in the Flesh etc.)
+        const _anyActiveTrait = !_overrideTraitName
+          ? (character.traits || []).find(t => {
+              const tn = (t.name || t._name || '').trim().toLowerCase();
+              return (TRAIT_ABILITY_OVERRIDES || {})[tn] &&
+                     TRAIT_ABILITY_OVERRIDES[tn].skill.toLowerCase() === sk.name.toLowerCase();
+            })
+          : null;
+        const _traitDisplay = _overrideTraitName
+          || (_anyActiveTrait ? (_anyActiveTrait.name || _anyActiveTrait._name || '').replace(/\b\w/g, c => c.toUpperCase()) : null)
+          || 'a trait';
+        dh += `<div style="border-top:1px solid rgba(176,144,208,0.2);margin-top:0.4rem;padding-top:0.4rem;">
+          <div style="font-size:0.65rem;color:#b090d0;font-family:Cinzel,serif;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.2rem;">★ Ability Override</div>
+          <div style="font-size:0.78rem;color:var(--text-secondary);line-height:1.6;">
+            <span style="color:#b090d0;font-weight:500;">${_traitDisplay}</span>
+            substitutes <span style="color:#b090d0;">${_skAbilOverride.toUpperCase()}</span>
+            for <span style="color:var(--text-muted);text-decoration:line-through;">${sk.ability.toUpperCase()}</span>
+            when calculating this skill.
+          </div>
+        </div>`;
+      }
       dh += '</div>';
       detailTd.innerHTML = dh;
       detailTr.appendChild(detailTd);
       tbody.appendChild(detailTr);
     }
+    // ── Inline custom subcategory lines (Craft/Profession/Perform only) ─────────
+    if (sk.name === 'Craft' || sk.name === 'Profession' || sk.name === 'Perform') {
+      const _customLines = character.customSkillLines || [];
+      const matchingLines = _customLines.filter(c => {
+        const m = c.match(/^(Craft|Profession|Perform)\b/i);
+        return m && m[1].toLowerCase() === sk.name.toLowerCase();
+      });
+      matchingLines.forEach((customSkillName) => {
+        const cAbil       = sk.ability;
+        const cIsCS       = classSkills.has(customSkillName) || classSkills.has(sk.name);
+        const cRanks      = Math.max(0, parseInt(character.skillRanks[customSkillName] || 0));
+        const cMisc       = parseInt(character.skillMisc[customSkillName] || 0);
+        const cAm         = abilMod(cAbil);
+        const cCsB        = (cIsCS && cRanks > 0) ? 3 : 0;
+        const cAcpVal     = sk.acp ? getEquippedACP() : 0;
+        const cBonuses    = allBonuses[customSkillName] || [];
+        const cUncondit   = cBonuses.filter(b => !b.conditional);
+        const cCondit     = cBonuses.filter(b => !!b.conditional);
+        const cApplied    = cUncondit.reduce((s, b) => s + b.value, 0);
+        const cTotal      = cRanks + cAm + cCsB + cMisc + cApplied + cAcpVal;
+        const cSlug       = slugify(customSkillName);
+        const cJsName     = customSkillName.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const cHasBonuses = cBonuses.length > 0;
+
+        const cTr = document.createElement('tr');
+        cTr.style.cssText = `background:rgba(201,168,76,0.04);border-left:2px solid rgba(201,168,76,0.18);${cHasBonuses ? 'cursor:pointer;' : ''}`;
+        if (cHasBonuses) {
+          cTr.onclick = function(e) {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+            const det = document.getElementById('csk-detail-' + cSlug);
+            if (det) det.style.display = det.style.display === 'none' ? 'table-row' : 'none';
+            const arr = this.querySelector('.csk-expand-arr');
+            if (arr) arr.textContent = det && det.style.display !== 'none' ? '▾' : '▸';
+          };
+        }
+        const cHasSpecial = cCondit.length > 0;
+        const cSpecialBadge = cHasSpecial
+          ? `<span title="Conditional bonus — click for details" style="font-size:0.52rem;color:#f0c040;background:rgba(240,192,64,0.15);border:1px solid rgba(240,192,64,0.3);border-radius:2px;padding:0 3px;margin-left:3px;font-family:Cinzel,serif;letter-spacing:0.06em;">SPECIAL</span>`
+          : '';
+        cTr.innerHTML = `
+          <td style="padding:0.25rem 0.5rem 0.25rem 1.5rem;color:var(--text-secondary);font-size:0.83rem;">
+            ${cHasBonuses ? `<span class="csk-expand-arr" style="font-size:0.6rem;color:rgba(201,168,76,0.5);margin-right:4px;display:inline-block;width:8px;">▸</span>` : `<span style="display:inline-block;width:12px;"></span>`}
+            <span style="color:rgba(201,168,76,0.4);margin-right:3px;font-size:0.72rem;">└</span>${customSkillName}${cSpecialBadge}
+            <span style="font-size:0.66rem;color:var(--text-muted);margin-left:0.25rem;">(${cAbil.toUpperCase()}${sk.trainedOnly ? ', T' : ''})</span>
+            <button onclick="removeCustomSkillLine('${cJsName}')" title="Remove this skill line"
+              style="margin-left:0.4rem;font-size:0.55rem;color:var(--text-muted);background:transparent;border:none;cursor:pointer;padding:0;line-height:1;opacity:0.55;">✕</button>
+          </td>
+          <td style="text-align:center;padding:0.25rem;vertical-align:middle;">
+            ${cIsCS ? `<span style="color:var(--gold);font-size:0.95rem;line-height:1;">●</span>` : `<span style="color:var(--text-muted);font-size:0.6rem;opacity:0.35;">○</span>`}
+          </td>
+          <td style="text-align:center;padding:0.2rem 0.1rem;">
+            <div style="display:inline-flex;align-items:stretch;border:1px solid var(--border);border-radius:4px;overflow:hidden;background:var(--bg-surface);">
+              <button onclick="stepSkillRank('${cSlug}','${cJsName}',${cAm},${cIsCS},${cApplied},-1)"
+                style="width:18px;min-height:22px;background:transparent;border:none;border-right:1px solid var(--border);color:${cRanks<=0?'rgba(255,255,255,0.18)':'var(--text-secondary)'};font-size:0.58rem;cursor:${cRanks<=0?'default':'pointer'};padding:0;line-height:1;flex-shrink:0;"
+                ${cRanks<=0?'disabled':''}>◀</button>
+              <span id="sk-rank-val-${cSlug}"
+                style="min-width:24px;text-align:center;color:${cRanks>0?'var(--gold-light)':'var(--text-muted)'};font-size:0.82rem;padding:0 4px;line-height:22px;font-weight:${cRanks>0?'600':'400'};">${cRanks}</span>
+              <button onclick="stepSkillRank('${cSlug}','${cJsName}',${cAm},${cIsCS},${cApplied},1)"
+                style="width:18px;min-height:22px;background:transparent;border:none;border-left:1px solid var(--border);color:${cRanks>=maxRankPerSkill?'rgba(255,255,255,0.18)':'var(--text-secondary)'};font-size:0.58rem;cursor:${cRanks>=maxRankPerSkill?'default':'pointer'};padding:0;line-height:1;flex-shrink:0;"
+                ${cRanks>=maxRankPerSkill?'disabled':''}>▶</button>
+            </div>
+          </td>
+          <td style="text-align:center;padding:0.25rem;color:${cAm<0?'#e05555':'var(--text-muted)'};font-size:0.82rem;">${fmtMod(cAm)}</td>
+          <td style="text-align:center;padding:0.2rem 0.1rem;">
+            <input type="number" value="${cMisc}"
+              style="width:42px;text-align:center;background:var(--bg-surface);border:1px solid var(--border);border-radius:3px;color:var(--text-primary);font-size:0.8rem;padding:0.1rem 0.2rem;"
+              oninput="updateSkillMiscBonus(this,'${cJsName}',${cAm},${cIsCS},${cApplied})">
+          </td>
+          <td id="sk-total-${cSlug}" style="text-align:center;padding:0.25rem;font-weight:600;font-size:0.9rem;color:${cTotal<0?'#e05555':cTotal!==0?'var(--gold-light)':'var(--text-muted)'};">
+            ${fmtMod(cTotal)}
+          </td>`;
+        tbody.appendChild(cTr);
+
+        // ── Expandable detail row for custom line ──────────────────────────────
+        if (cHasBonuses) {
+          const cDetTr = document.createElement('tr');
+          cDetTr.id = 'csk-detail-' + cSlug;
+          cDetTr.style.display = 'none';
+          const cDetTd = document.createElement('td');
+          cDetTd.setAttribute('colspan', '6');
+          cDetTd.style.cssText = 'padding:0.4rem 0.5rem 0.6rem 2.5rem;background:rgba(201,168,76,0.02);border-bottom:1px solid rgba(201,168,76,0.1);border-left:2px solid rgba(201,168,76,0.18);';
+
+          let cdh = '<div style="font-size:0.76rem;line-height:1.8;">';
+          cdh += '<div style="font-family:Cinzel,serif;font-size:0.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.3rem;">Bonus Breakdown</div>';
+          cdh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;">
+            <span style="display:inline-block;min-width:140px;">Ability (${cAbil.toUpperCase()}):</span>
+            <span style="color:${cAm < 0 ? '#e05555' : 'var(--text-primary)'};">${fmtMod(cAm)}</span></div>`;
+          if (cIsCS) {
+            cdh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;">
+              <span style="display:inline-block;min-width:140px;">Class Skill:</span>
+              <span style="color:var(--text-primary);">${cRanks > 0 ? '+3' : '+0 (needs ranks)'}</span></div>`;
+          }
+          for (const b of cUncondit) {
+            const sc = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
+            cdh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;">
+              <span style="display:inline-block;min-width:140px;">
+                <span style="font-size:0.58rem;background:${sc.bg};color:${sc.text};border:1px solid ${sc.border};border-radius:2px;padding:0 3px;margin-right:4px;vertical-align:1px;">${sc.label}</span>${b.source}:</span>
+              <span style="color:#7ac87a;font-weight:500;">${fmtMod(b.value)}</span></div>`;
+          }
+          for (const b of cCondit) {
+            const sc = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
+            cdh += `<div style="color:var(--text-secondary);display:flex;gap:0.5rem;align-items:center;opacity:0.85;">
+              <span style="display:inline-block;min-width:140px;">
+                <span style="font-size:0.58rem;background:${sc.bg};color:${sc.text};border:1px solid ${sc.border};border-radius:2px;padding:0 3px;margin-right:4px;vertical-align:1px;">${sc.label}</span>${b.source}:</span>
+              <span style="color:#f0c040;">${fmtMod(b.value)}</span>
+              <span style="font-size:0.55rem;color:#f0c040;background:rgba(240,192,64,0.12);border:1px solid rgba(240,192,64,0.25);border-radius:2px;padding:0 3px;font-family:Cinzel,serif;letter-spacing:0.04em;">SPECIAL</span>
+              <span style="color:var(--text-muted);font-style:italic;font-size:0.72rem;">${b.conditional}</span></div>`;
+          }
+          cdh += '</div>';
+          cDetTd.innerHTML = cdh;
+          cDetTr.appendChild(cDetTd);
+          tbody.appendChild(cDetTr);
+        }
+      });
+    }
   });
   tbl.appendChild(tbody);
+
+  // ── "+" buttons for adding custom Craft/Profession/Perform lines ─────────────
+  const _addBtnsDiv = document.createElement('div');
+  _addBtnsDiv.style.cssText = 'margin-top:0.55rem;display:flex;gap:0.6rem;flex-wrap:wrap;';
+  for (const parentName of ['Craft', 'Profession', 'Perform']) {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'font-family:Cinzel,serif;font-size:0.65rem;padding:0.2rem 0.6rem;background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.25);border-radius:4px;color:var(--gold);cursor:pointer;';
+    btn.textContent = `+ Add ${parentName} (…)`;
+    btn.onclick = () => addCustomSkillLine(parentName);
+    _addBtnsDiv.appendChild(btn);
+  }
   body.appendChild(tbl);
+  body.appendChild(_addBtnsDiv);
 
   // Legend
   const legend = document.createElement('div');
@@ -15124,7 +17825,8 @@ function renderCardSection(container, title, category, items, onRemove, extraBut
     grid.className = 'char-card-grid';
     items.forEach((item, idx) => {
       const name = item.name || item._name;
-      const cardEl = createCard(category, item);
+      // suppressBrowseTags: the character page renders its own pill system below each card
+      const cardEl = createCard(category, item, { suppressBrowseTags: true });
       // Patch the Add/Remove button
       const btn = cardEl.querySelector('.card-btn');
       if (btn) { btn.textContent = 'Remove'; btn.onclick = e => { e.stopPropagation(); onRemove(name); }; }
@@ -15399,12 +18101,76 @@ function renderClassesSection(container) {
         }
       }
 
-      // ── Favored Class badge ───────────────────────────────────────────────
+      // ── Prestige class prerequisite warning ──────────────────────────────
+      if ((cls._path || '').includes('/class/prestige/')) {
+        const failedPrereqs = checkPrestigePrereqs(clsName);
+        if (failedPrereqs.length > 0) {
+          const prereqWarn = document.createElement('div');
+          prereqWarn.style.cssText = 'border-top:1px solid rgba(200,80,80,0.3);padding:0.4rem 1.25rem 0.45rem;background:rgba(200,60,60,0.06);display:flex;align-items:flex-start;gap:0.5rem;flex-wrap:wrap;';
+          prereqWarn.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;letter-spacing:0.08em;color:#e07070;white-space:nowrap;padding-top:1px;">⚠ Prereqs not met:</span>`
+            + failedPrereqs.map(p => `<span style="font-size:0.65rem;color:rgba(230,140,140,0.9);background:rgba(200,60,60,0.12);border:1px solid rgba(200,80,80,0.25);border-radius:3px;padding:1px 6px;">${p}</span>`).join('');
+          cardEl.appendChild(prereqWarn);
+        }
+      }
+
+      // ── Favored Class panel ───────────────────────────────────────────────
       if (character.favoredClassIndex === clsIdx) {
-        const badge = document.createElement('div');
-        badge.style.cssText = 'display:flex;align-items:center;gap:0.4rem;padding:0.3rem 1.25rem 0;margin-top:-0.25rem;';
-        badge.innerHTML = '<span style="color:#f0c040;font-size:0.75rem;">★</span><span style="font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;color:rgba(240,192,64,0.8);">Favored Class</span>';
-        cardEl.insertBefore(badge, cardEl.children[1] || null);
+        const fcPanel = document.createElement('div');
+        fcPanel.style.cssText = 'border-top:1px solid rgba(240,192,64,0.25);padding:0.6rem 1.25rem 0.7rem;background:rgba(240,192,64,0.04);';
+
+        const b      = character.favoredClassBonuses || { hp:0, skill:0, race:0 };
+        const fcLvl  = parseInt(cls.level) || 0;
+        const used   = (b.hp||0) + (b.skill||0) + (b.race||0);
+        const remain = Math.max(0, fcLvl - used);
+
+        // Determine if the character's race has an ARG bonus for this class
+        const _fcRaceName  = character.race ? (character.race.name || character.race._name || '') : '';
+        const _fcClsName   = cls.name || cls._name || '';
+        const _fcRaceBonusId = `fc-race-bonus-${clsIdx}`;
+
+        // Counter helper — renders [−] N [+] with disable logic
+        const counter = (type, val, canDec, canInc, label) => {
+          const safeType = type;
+          return `<div style="display:flex;flex-direction:column;align-items:center;gap:0.2rem;min-width:52px;">
+            <span style="font-family:Cinzel,serif;font-size:0.57rem;text-transform:uppercase;letter-spacing:0.09em;color:rgba(240,192,64,0.7);">${label}</span>
+            <div style="display:flex;align-items:center;gap:0.3rem;">
+              <button onclick="event.stopPropagation();adjustFavoredClassBonus('${safeType}',-1)"
+                style="width:18px;height:18px;border-radius:3px;border:1px solid var(--border-glow);background:var(--bg-surface);color:var(--text-secondary);font-size:0.75rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;${canDec?'':'opacity:0.3;pointer-events:none;'}">−</button>
+              <span style="font-family:Cinzel,serif;font-size:0.9rem;color:var(--gold);min-width:14px;text-align:center;">${val}</span>
+              <button onclick="event.stopPropagation();adjustFavoredClassBonus('${safeType}',1)"
+                style="width:18px;height:18px;border-radius:3px;border:1px solid var(--border-glow);background:var(--bg-surface);color:var(--text-secondary);font-size:0.75rem;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;${canInc?'':'opacity:0.3;pointer-events:none;'}">+</button>
+            </div>
+          </div>`;
+        };
+
+        // Header row: star label + remaining slots chip
+        const remainColor = remain > 0 ? '#c97a2a' : 'rgba(240,192,64,0.5)';
+        fcPanel.innerHTML = `
+          <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.55rem;">
+            <span style="color:#f0c040;font-size:0.75rem;">★</span>
+            <span style="font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;color:rgba(240,192,64,0.9);">Favored Class Bonuses</span>
+            <span style="margin-left:auto;font-family:Cinzel,serif;font-size:0.6rem;padding:1px 6px;border-radius:3px;border:1px solid ${remainColor};color:${remainColor};">${remain} left of ${fcLvl}</span>
+          </div>
+          <div style="display:flex;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
+            ${counter('hp',    b.hp||0,    (b.hp||0)>0,    remain>0, '+HP')}
+            ${counter('skill', b.skill||0, (b.skill||0)>0, remain>0, '+Skill Rank')}
+            ${_fcRaceName ? counter('race', b.race||0, (b.race||0)>0, remain>0, 'Race Bonus') : ''}
+          </div>
+          ${_fcRaceName ? `<div id="${_fcRaceBonusId}" style="margin-top:0.45rem;font-size:0.72rem;color:var(--text-secondary);font-style:italic;min-height:1em;line-height:1.45;"></div>` : ''}
+        `;
+        cardEl.appendChild(fcPanel);
+
+        // Async: load race-specific bonus text from ARG and inject it
+        if (_fcRaceName && _fcClsName) {
+          loadFavoredClassRaceBonus(_fcRaceName, _fcClsName).then(text => {
+            const el = document.getElementById(_fcRaceBonusId);
+            if (el) {
+              el.textContent = text
+                ? `Race bonus: ${text}`
+                : 'No race-specific bonus in the Advanced Race Guide for this combination.';
+            }
+          });
+        }
       }
 
       // ── Archetypes ───────────────────────────────────────────────────────
@@ -16516,7 +19282,7 @@ function renderCharacter() {
     // ── Racial bonus feat notification (e.g. Human bonus feat) ───────────
     {
       const raceName = (character.race.name || character.race._name || '').toLowerCase().trim();
-      const raceBonusFeats = RACE_BONUS_FEATS[raceName] || 0;
+      const raceBonusFeats = RACE_BONUS_FEATS[raceKey(raceName, RACE_BONUS_FEATS)] || 0;
       if (raceBonusFeats > 0) {
         const featBudget = calculateFeatBudget();
         // Only compare base+racial slots vs level-sourced feats (class bonus feats are separate)
@@ -16604,6 +19370,189 @@ function renderCharacter() {
   }, (trait, cardEl, idx) => {
     const body = cardEl.querySelector('.card-body');
     const appendTo = body || cardEl;
+
+    // ── Bonus summary pills — show what stat/skill bonuses this trait applies ──
+    const _traitNameFx = (trait.name || trait._name || '').trim();
+    const _traitNameKey = _traitNameFx.toLowerCase();
+    // Green: flat unconditional stat bonuses (saves, init, AC, conc) — value > 0
+    const _traitStatBonuses = (character.statBonuses || []).filter(
+      b => b.source === _traitNameFx && b.stat !== '_info' && b.value > 0
+    );
+    // Amber: conditional stat bonuses (cond_* stats) — value:0 but conditional field present
+    const _traitCondStatBonuses = (character.statBonuses || []).filter(
+      b => b.source === _traitNameFx && b.conditional && !b.value
+    );
+    // Skill bonuses from cached getSkillBonuses() result (Phase 8d)
+    // Populate cache if not yet set (e.g., character page visited before skills page)
+    if (!_cachedSkillBonuses) getSkillBonuses();
+    const _traitSkillBonuses = [];      // unconditional skill bonuses (blue)
+    const _traitCondBonuses  = [];      // conditional skill bonuses (amber)
+    const _traitPenaltyNotes = [];      // penalty-reduction notes (purple/muted)
+    if (_cachedSkillBonuses) {
+      for (const [skillName, entries] of Object.entries(_cachedSkillBonuses)) {
+        for (const e of entries) {
+          if (e.source !== _traitNameFx) continue;
+          if (e.value && !e.conditional) {
+            _traitSkillBonuses.push({ skill: skillName, value: e.value });
+          } else if (e.value && e.conditional) {
+            _traitCondBonuses.push({ skill: skillName, value: e.value, conditional: e.conditional });
+          } else if (!e.value && e.conditional) {
+            // value:0 entries are penalty-reduction notes (from section 5c)
+            _traitPenaltyNotes.push({ skill: skillName, note: e.conditional });
+          }
+        }
+      }
+    }
+    // Purple info tags from TRAIT_INFO_TAGS
+    const _traitInfoTags = TRAIT_INFO_TAGS[_traitNameKey] || [];
+    // Ability override info tag
+    const _abilOverride = TRAIT_ABILITY_OVERRIDES[_traitNameKey];
+
+    const _hasPills = _traitStatBonuses.length || _traitCondStatBonuses.length ||
+                      _traitSkillBonuses.length || _traitCondBonuses.length ||
+                      _traitPenaltyNotes.length || _traitInfoTags.length || _abilOverride;
+    if (_hasPills) {
+      const pillRow = document.createElement('div');
+      pillRow.style.cssText = 'margin-top:0.45rem;display:flex;flex-wrap:wrap;gap:0.25rem;';
+      // Green: flat unconditional stat bonuses (saves, init, AC, concentration)
+      for (const b of _traitStatBonuses) {
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;white-space:nowrap;';
+        // Strip trailing "(TraitName)" parenthetical — redundant on a trait's own card
+        pill.textContent = (b.label || `${b.stat} +${b.value}`).replace(/\s*\([^)]+\)\s*$/, '');
+        pillRow.appendChild(pill);
+      }
+      // Amber: conditional stat bonuses (not applied to totals)
+      const _condStatSeen = new Set();
+      for (const b of _traitCondStatBonuses) {
+        const pillLabel = (b.label || '').replace(/\s*\([^)]+\)\s*$/, '').trim();
+        if (!pillLabel || _condStatSeen.has(pillLabel)) continue;
+        _condStatSeen.add(pillLabel);
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;white-space:nowrap;';
+        const condShort = b.conditional.length > 32 ? b.conditional.slice(0, 30) + '…' : b.conditional;
+        pill.textContent = `\u2605 ${pillLabel}`;
+        pill.title = `Conditional: ${b.conditional}`;
+        pillRow.appendChild(pill);
+      }
+      // Blue: unconditional skill bonuses (always applied)
+      for (const sk of _traitSkillBonuses) {
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;white-space:nowrap;';
+        pill.textContent = `\u2191 ${sk.skill} +${sk.value}`;
+        pillRow.appendChild(pill);
+      }
+      // Amber: conditional skill bonuses (situational — not auto-applied)
+      for (const ck of _traitCondBonuses) {
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;white-space:nowrap;';
+        // Truncate long condition text on the pill; full text in title tooltip
+        const condShort = ck.conditional.length > 30 ? ck.conditional.slice(0, 28) + '…' : ck.conditional;
+        pill.textContent = `\u2605 ${ck.skill} +${ck.value} (${condShort})`;
+        pill.title = `${ck.skill} +${ck.value} — conditional: ${ck.conditional}`;
+        pillRow.appendChild(pill);
+      }
+      // Muted purple: penalty-reduction notes (e.g. Acrobat: -1 instead of -5 on Climb)
+      for (const pn of _traitPenaltyNotes) {
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;white-space:nowrap;';
+        const noteShort = pn.note.length > 35 ? pn.note.slice(0, 33) + '…' : pn.note;
+        pill.textContent = `\u26a1 ${pn.skill}: ${noteShort}`;
+        pill.title = `${pn.skill}: ${pn.note}`;
+        pillRow.appendChild(pill);
+      }
+      // Purple: TRAIT_INFO_TAGS (non-stat informational effects)
+      for (const tagText of _traitInfoTags) {
+        if (!tagText) continue;
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;white-space:nowrap;';
+        pill.textContent = tagText;
+        pillRow.appendChild(pill);
+      }
+      // Purple: ability-score substitution override
+      if (_abilOverride) {
+        const pill = document.createElement('span');
+        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+          'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;white-space:nowrap;';
+        pill.textContent = `\u2605 Uses ${_abilOverride.ability.toUpperCase()} for ${_abilOverride.skill}`;
+        pillRow.appendChild(pill);
+      }
+      appendTo.appendChild(pillRow);
+    }
+
+    // ── Skill choice pill — shows chosen class skill / bonus skill for choice traits ──
+    {
+      const _rawForChoice = (trait.description || trait.benefit || traitBodyMap[_traitNameFx.toLowerCase()] || '');
+      const _choiceInfo = _rawForChoice ? parseTraitSkillChoice(_rawForChoice) : null;
+      if (_choiceInfo && _choiceInfo.options && _choiceInfo.options.length >= 2) {
+        const _chosenSkill = (character.traitSkillChoices || {})[_traitNameFx];
+
+        const choiceRow = document.createElement('div');
+        choiceRow.style.cssText = 'margin-top:0.35rem;display:flex;flex-wrap:wrap;gap:0.25rem;align-items:center;';
+
+        if (_chosenSkill) {
+          // Show the chosen skill as a teal pill — clickable to re-choose
+          const choicePill = document.createElement('span');
+          const _isClassSkill = _choiceInfo.classSkill;
+          const _isBonus      = _choiceInfo.bonus > 0;
+
+          // Label: "✦ Class Skill: Handle Animal" or "✦ +1 Bonus: Acrobatics" or "✦ Chosen: Acrobatics"
+          // When both classSkill and bonus apply, show only the class skill label here —
+          // the +N bonus is already shown as a separate blue skill pill above.
+          let pillLabel = '';
+          if (_isClassSkill && _isBonus)  pillLabel = `\u2736 Class Skill: ${_chosenSkill}`;
+          else if (_isClassSkill)         pillLabel = `\u2736 Class Skill: ${_chosenSkill}`;
+          else if (_isBonus)              pillLabel = `\u2736 +${_choiceInfo.bonus} Bonus: ${_chosenSkill}`;
+          else                            pillLabel = `\u2736 Chosen: ${_chosenSkill}`;
+
+          choicePill.textContent = pillLabel;
+          choicePill.title = `Click to change your choice (options: ${_choiceInfo.options.join(', ')})`;
+          choicePill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+            'background:rgba(60,190,180,0.12);border:1px solid rgba(60,190,180,0.35);color:#5adcd0;' +
+            'white-space:nowrap;cursor:pointer;';
+          choicePill.addEventListener('click', e => {
+            e.stopPropagation();
+            showTraitSkillChoiceModal(_traitNameFx, _choiceInfo, chosenSkill => {
+              if (!character.traitSkillChoices) character.traitSkillChoices = {};
+              character.traitSkillChoices[_traitNameFx] = chosenSkill;
+              recomputeStatBonuses();
+              _cachedSkillBonuses = null;
+              renderCharacter();
+            });
+          });
+          choiceRow.appendChild(choicePill);
+        } else {
+          // No choice made yet — show a warning pill that opens the modal
+          const warnPill = document.createElement('span');
+          const _what = _choiceInfo.classSkill ? 'class skill' : `+${_choiceInfo.bonus} skill`;
+          warnPill.textContent = `\u26a0 Choose ${_what}\u2026`;
+          warnPill.title = `Click to choose from: ${_choiceInfo.options.join(', ')}`;
+          warnPill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+            'background:rgba(220,140,40,0.12);border:1px solid rgba(220,140,40,0.4);color:#dfa040;' +
+            'white-space:nowrap;cursor:pointer;';
+          warnPill.addEventListener('click', e => {
+            e.stopPropagation();
+            showTraitSkillChoiceModal(_traitNameFx, _choiceInfo, chosenSkill => {
+              if (!character.traitSkillChoices) character.traitSkillChoices = {};
+              character.traitSkillChoices[_traitNameFx] = chosenSkill;
+              recomputeStatBonuses();
+              _cachedSkillBonuses = null;
+              renderCharacter();
+            });
+          });
+          choiceRow.appendChild(warnPill);
+        }
+
+        appendTo.appendChild(choiceRow);
+      }
+    }
+
     const replBtn = document.createElement('button');
     replBtn.textContent = 'Replace';
     replBtn.style.cssText = 'margin-top:0.55rem;width:100%;background:transparent;border:1px solid var(--gold);border-radius:5px;color:var(--gold);font-family:Cinzel,serif;font-size:0.72rem;padding:0.3rem 0.7rem;cursor:pointer;transition:background 0.15s;';
@@ -16665,6 +19614,83 @@ function renderCharacter() {
         appendTo.appendChild(tag);
       }
 
+      // ── Bonus summary pills — stat bonuses this feat currently provides ──
+      if (feat) {
+        const _featNameFx = (feat.name || feat._name || '').trim();
+        const _featKeyFx  = _featNameFx.toLowerCase();
+        // Flat stat bonuses from character.statBonuses (already computed)
+        const _featStatBonuses = (character.statBonuses || []).filter(
+          b => b.source === _featNameFx && b.value
+        );
+        // Skill bonuses from FEAT_SKILL_EFFECTS table
+        const _featSkillBonuses = (FEAT_SKILL_EFFECTS[_featKeyFx] || []).filter(fx => fx.value);
+        // Informational _info entries from FEAT_EFFECTS (conditional feats)
+        const _featInfoBonuses = (FEAT_EFFECTS[_featKeyFx] || []).filter(fx => fx.stat === '_info');
+        if (_featStatBonuses.length || _featSkillBonuses.length || _featInfoBonuses.length) {
+          const pillRow = document.createElement('div');
+          pillRow.style.cssText = 'margin-top:0.45rem;display:flex;flex-wrap:wrap;gap:0.25rem;';
+          for (const b of _featStatBonuses) {
+            const pill = document.createElement('span');
+            pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+              'background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;white-space:nowrap;';
+            pill.textContent = b.label || `${b.stat} +${b.value}`;
+            pillRow.appendChild(pill);
+          }
+          for (const sk of _featSkillBonuses) {
+            const pill = document.createElement('span');
+            pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+              'background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;white-space:nowrap;';
+            pill.textContent = sk.conditional
+              ? `\u2191 ${sk.skill} +${sk.value} (${sk.conditional})`
+              : `\u2191 ${sk.skill} +${sk.value}`;
+            pillRow.appendChild(pill);
+          }
+          for (const info of _featInfoBonuses) {
+            const pill = document.createElement('span');
+            pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
+              'background:rgba(180,150,80,0.1);border:1px solid rgba(180,150,80,0.3);color:#c8a86a;white-space:nowrap;';
+            pill.textContent = info.label;
+            pillRow.appendChild(pill);
+          }
+          appendTo.appendChild(pillRow);
+        }
+      }
+
+      // ── Toggle button — for feats that are in TOGGLEABLE_FEATS ──
+      if (feat) {
+        const _featKeyTgl = (feat.name || feat._name || '').toLowerCase();
+        const _tglDef = TOGGLEABLE_FEATS[_featKeyTgl];
+        if (_tglDef && _tglDef.isFeat) {
+          const _isOn = !!(character.featToggles || {})[_featKeyTgl];
+          const tglBtn = document.createElement('button');
+          tglBtn.textContent = _isOn ? '⚔️ Active — Click to Deactivate' : '⚔️ Activate in Combat';
+          tglBtn.style.cssText = `margin-top:0.45rem;width:100%;border-radius:5px;font-family:Cinzel,serif;font-size:0.72rem;padding:0.3rem 0.7rem;cursor:pointer;transition:background 0.15s,border-color 0.15s;` +
+            (_isOn
+              ? 'background:rgba(100,200,120,0.18);border:1px solid rgba(100,200,120,0.5);color:#80c890;'
+              : 'background:transparent;border:1px solid rgba(150,150,150,0.4);color:var(--text-muted);');
+          tglBtn.onclick = e => {
+            e.stopPropagation();
+            if (!character.featToggles) character.featToggles = {};
+            character.featToggles[_featKeyTgl] = !character.featToggles[_featKeyTgl];
+            // Mutual exclusivity guard (relevant if combat options added as feats)
+            if (_featKeyTgl === 'total defense' && character.featToggles[_featKeyTgl])
+              character.featToggles['fighting defensively'] = false;
+            if (_featKeyTgl === 'fighting defensively' && character.featToggles[_featKeyTgl])
+              character.featToggles['total defense'] = false;
+            recomputeStatBonuses();
+            // Update button state immediately without closing open breakdown panels
+            const nowOn = !!character.featToggles[_featKeyTgl];
+            tglBtn.textContent = nowOn ? '⚔️ Active — Click to Deactivate' : '⚔️ Activate in Combat';
+            tglBtn.style.cssText = `margin-top:0.45rem;width:100%;border-radius:5px;font-family:Cinzel,serif;font-size:0.72rem;padding:0.3rem 0.7rem;cursor:pointer;transition:background 0.15s,border-color 0.15s;` +
+              (nowOn
+                ? 'background:rgba(100,200,120,0.18);border:1px solid rgba(100,200,120,0.5);color:#80c890;'
+                : 'background:transparent;border:1px solid rgba(150,150,150,0.4);color:var(--text-muted);');
+            if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
+          };
+          appendTo.appendChild(tglBtn);
+        }
+      }
+
       // ── Replace button — ALL feats except auto-granted ──
       if (feat && !feat.autoGranted) {
         const replBtn = document.createElement('button');
@@ -16708,6 +19734,62 @@ function renderCharacter() {
     const eqSection = document.createElement('div');
     eqSection.className = 'char-section';
     eqSection.innerHTML = '<div class="char-section-title">Equipment</div>';
+
+    // ── Encumbrance bar ──────────────────────────────────────────────────────
+    {
+      const enc = getEncumbrance();
+      const { load, total, cap } = enc;
+      const loadColors = { light:'#6abf7a', medium:'#c9a84c', heavy:'#e05555' };
+      const loadColor  = loadColors[load] || '#aaa';
+      const pct = cap.heavy > 0 ? Math.min(100, Math.round((total / cap.heavy) * 100)) : 0;
+
+      const encBar = document.createElement('div');
+      encBar.style.cssText = 'margin:0.5rem 0 0.9rem;padding:0.55rem 0.75rem;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;';
+
+      // Label row
+      const encLabelRow = document.createElement('div');
+      encLabelRow.style.cssText = 'display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;';
+      encLabelRow.innerHTML = `
+        <span style="font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted);">Encumbrance</span>
+        <span style="font-family:Cinzel Decorative,serif;font-size:0.7rem;font-weight:700;color:${loadColor};text-transform:capitalize;">${load}</span>
+        <span style="margin-left:auto;font-family:Cinzel,serif;font-size:0.62rem;color:var(--text-muted);">${total.toFixed(1)} / ${cap.heavy} lbs</span>
+      `;
+      encBar.appendChild(encLabelRow);
+
+      // Progress bar track
+      const track = document.createElement('div');
+      track.style.cssText = 'height:6px;background:var(--bg-deep);border-radius:3px;overflow:hidden;position:relative;';
+      // Light zone marker at cap.light/cap.heavy
+      const lightPct = cap.heavy > 0 ? Math.round((cap.light / cap.heavy) * 100) : 33;
+      const medPct   = cap.heavy > 0 ? Math.round((cap.medium / cap.heavy) * 100) : 66;
+      track.innerHTML = `
+        <div style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${loadColor};border-radius:3px;transition:width 0.3s;"></div>
+        <div style="position:absolute;left:${lightPct}%;top:0;height:100%;width:1px;background:rgba(255,255,255,0.2);"></div>
+        <div style="position:absolute;left:${medPct}%;top:0;height:100%;width:1px;background:rgba(255,255,255,0.2);"></div>
+      `;
+      encBar.appendChild(track);
+
+      // Threshold labels
+      const threshRow = document.createElement('div');
+      threshRow.style.cssText = 'display:flex;justify-content:space-between;margin-top:0.2rem;';
+      threshRow.innerHTML = `
+        <span style="font-family:Cinzel,serif;font-size:0.52rem;color:#6abf7a;">Light ≤${cap.light}</span>
+        <span style="font-family:Cinzel,serif;font-size:0.52rem;color:#c9a84c;">Med ≤${cap.medium}</span>
+        <span style="font-family:Cinzel,serif;font-size:0.52rem;color:#e05555;">Heavy ≤${cap.heavy}</span>
+      `;
+      encBar.appendChild(threshRow);
+
+      // Penalty note if encumbered
+      if (load !== 'light') {
+        const penaltyNote = document.createElement('div');
+        penaltyNote.style.cssText = `margin-top:0.3rem;font-family:Cinzel,serif;font-size:0.58rem;color:${loadColor};`;
+        if (load === 'medium') penaltyNote.textContent = 'Medium load: Max DEX +3 · ACP −3 · Speed ×0.75';
+        else penaltyNote.textContent = 'Heavy load: Max DEX +1 · ACP −6 · Speed ×0.5 · Run ×3';
+        encBar.appendChild(penaltyNote);
+      }
+
+      eqSection.appendChild(encBar);
+    }
 
     const EQ_GROUPS = [
       { label:'Weapons',         icon:'⚔️',  test: c => c && ['Simple','Martial','Exotic'].includes(c.main) && c.sub !== 'Ammunition' },
@@ -16768,16 +19850,19 @@ function renderCharacter() {
               cardEl.classList.remove('char-card-equipped');
             } else {
               // Unequip others in same slot
-              for (const [oName, oSlot] of Object.entries(character.equipped)) {
-                if (oSlot === slot) {
-                  delete character.equipped[oName];
-                  document.querySelectorAll(`[data-eq-item]`).forEach(b2 => {
-                    if (b2.getAttribute('data-eq-item') === oName) {
-                      b2.className = 'char-equip-btn-inline';
-                      b2.textContent = 'Equip';
-                      b2.closest('.char-card-equipped')?.classList.remove('char-card-equipped');
-                    }
-                  });
+              // Exception: weapons can be dual-wielded, so skip mutual exclusion for 'weapon' slot
+              if (slot !== 'weapon') {
+                for (const [oName, oSlot] of Object.entries(character.equipped)) {
+                  if (oSlot === slot) {
+                    delete character.equipped[oName];
+                    document.querySelectorAll(`[data-eq-item]`).forEach(b2 => {
+                      if (b2.getAttribute('data-eq-item') === oName) {
+                        b2.className = 'char-equip-btn-inline';
+                        b2.textContent = 'Equip';
+                        b2.closest('.char-card-equipped')?.classList.remove('char-card-equipped');
+                      }
+                    });
+                  }
                 }
               }
               character.equipped[iName] = slot;
@@ -17528,6 +20613,7 @@ async function loadSavedCharacter(id) {
   if (character.statsBase.alignment === undefined) character.statsBase.alignment = 'TN';
   if (character.stats.xp === undefined)    character.stats.xp    = 0;
   if (character.statsBase.xp === undefined) character.statsBase.xp = 0;
+  if (!character.featToggles) character.featToggles = {};
 
   // Pre-fill name input
   const input = document.getElementById('chars-name-input');
@@ -18041,10 +21127,87 @@ function setClassLevel(className, level) {
   if (cls) { cls.level = parseInt(level) || 1; renderCharacter(); }
 }
 
-// Set favored class
+// Set favored class — resets bonus choices since they're tied to the chosen class
 function setFavoredClass(className) {
   const idx = character.classes.findIndex(c => c.name === className);
-  if (idx >= 0) { character.favoredClassIndex = idx; renderCharacter(); }
+  if (idx >= 0) {
+    character.favoredClassIndex = idx;
+    character.favoredClassBonuses = { hp:0, skill:0, race:0 };
+    renderCharacter();
+  }
+}
+
+// Adjust a favored class bonus counter (+1 or -1), clamped to valid range.
+// type: 'hp' | 'skill' | 'race'
+function adjustFavoredClassBonus(type, delta) {
+  if (!character.favoredClassBonuses) character.favoredClassBonuses = { hp:0, skill:0, race:0 };
+  const b = character.favoredClassBonuses;
+  const fc = character.classes[character.favoredClassIndex];
+  const maxChoices = fc ? (parseInt(fc.level) || 0) : 0;
+  const used = (b.hp||0) + (b.skill||0) + (b.race||0);
+  const cur = b[type] || 0;
+  if (delta > 0 && used >= maxChoices) return;   // no slots left
+  if (delta < 0 && cur <= 0) return;             // already at 0
+  b[type] = cur + delta;
+  // Refresh skill tracker without full re-render (HP refresh needs full render)
+  if (type === 'skill') {
+    const tracker = document.getElementById('skills-rank-tracker');
+    if (tracker) {
+      const avail = calcSkillAvailableRanks();
+      const used2 = Object.values(character.skillRanks||{}).reduce((s,v)=>s+Math.max(0,parseInt(v)||0),0);
+      tracker.textContent = `${used2} / ${avail} ranks`;
+      tracker.dataset.avail = avail;
+    }
+  }
+  renderCharacter();
+}
+
+// ── Favored class race bonus loader ──────────────────────────────────────────
+// Returns the ARG race-specific favored class bonus text for [raceName] + [className],
+// or null if none exists.  Queries book-arg.db on demand (cached after first call).
+const _fcRaceBonusCache = {};
+async function loadFavoredClassRaceBonus(raceName, className) {
+  if (!raceName || !className) return null;
+  const cacheKey = `${raceName}|${className}`.toLowerCase();
+  if (cacheKey in _fcRaceBonusCache) return _fcRaceBonusCache[cacheKey];
+
+  try {
+    // Normalise: the ARG stores race names in plural Title Case ("Dwarves")
+    const raceSearch = raceName.endsWith('s') ? raceName : raceName + 's';
+    // Step 1 — find the race section by name (try plural then singular)
+    let raceRows = await bookQuery('book-arg.db',
+      `SELECT section_id FROM sections WHERE LOWER(name)=LOWER(?) AND type='race' LIMIT 1`,
+      [raceSearch]);
+    if (!raceRows.length) {
+      raceRows = await bookQuery('book-arg.db',
+        `SELECT section_id FROM sections WHERE LOWER(name)=LOWER(?) AND type='race' LIMIT 1`,
+        [raceName]);
+    }
+    if (!raceRows.length) { _fcRaceBonusCache[cacheKey] = null; return null; }
+    const raceSid = raceRows[0].section_id;
+
+    // Step 2 — find the "Favored Class Options" child of that race
+    const fcoRows = await bookQuery('book-arg.db',
+      `SELECT section_id FROM sections WHERE parent_id=? AND name='Favored Class Options' LIMIT 1`,
+      [raceSid]);
+    if (!fcoRows.length) { _fcRaceBonusCache[cacheKey] = null; return null; }
+    const fcoSid = fcoRows[0].section_id;
+
+    // Step 3 — find the child entry for this class
+    const clsRows = await bookQuery('book-arg.db',
+      `SELECT body FROM sections WHERE parent_id=? AND LOWER(name)=LOWER(?) LIMIT 1`,
+      [fcoSid, className]);
+    if (!clsRows.length) { _fcRaceBonusCache[cacheKey] = null; return null; }
+
+    // Strip HTML tags to get plain text
+    const raw = clsRows[0].body || '';
+    const text = raw.replace(/<[^>]+>/g, '').trim();
+    _fcRaceBonusCache[cacheKey] = text || null;
+    return _fcRaceBonusCache[cacheKey];
+  } catch(e) {
+    _fcRaceBonusCache[cacheKey] = null;
+    return null;
+  }
 }
 
 // Scroll to the class progression table
