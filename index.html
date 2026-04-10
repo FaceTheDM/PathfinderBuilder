@@ -1634,7 +1634,7 @@
     transition: all 0.15s; flex-shrink: 0;
   }
   .chars-save-confirm:hover { background: rgba(201,168,76,0.28); border-color: var(--gold); }
-  .chars-list { flex: 1; overflow-y: auto; padding: 0.8rem 1.4rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  .chars-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0.8rem 1.4rem; display: flex; flex-direction: column; gap: 0.6rem; }
   .chars-list-empty {
     text-align: center; padding: 3rem 1rem; color: var(--text-muted);
     font-family: 'Cinzel', serif; font-size: 0.85rem; opacity: 0.6;
@@ -1642,6 +1642,7 @@
   .char-slot {
     background: var(--bg-card); border: 1px solid var(--border);
     border-radius: 7px; overflow: hidden; transition: border-color 0.15s;
+    flex-shrink: 0;
   }
   .char-slot:hover { border-color: var(--border-glow); }
   .char-slot-header {
@@ -1682,6 +1683,7 @@
     padding: 0.9rem 1.4rem 1.1rem;
     border-top: 1px solid var(--border);
     display: flex; flex-direction: column; gap: 0.5rem;
+    flex-shrink: 0;
   }
   .chars-upload-label {
     font-family: 'Cinzel', serif; font-size: 0.68rem; text-transform: uppercase;
@@ -1695,6 +1697,16 @@
     cursor: pointer; transition: all 0.15s; text-align: center;
   }
   .chars-upload-btn:hover { background: rgba(80,140,180,0.1); border-color: #8bc; }
+  .chars-upload-btn.export {
+    color: var(--gold); border-color: rgba(201,168,76,0.4);
+  }
+  .chars-upload-btn.export:hover { background: rgba(201,168,76,0.1); border-color: var(--gold); }
+  .chars-library-bar {
+    padding: 0.9rem 1.4rem 1.1rem;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 0.5rem;
+    flex-shrink: 0;
+  }
 
   /* ── Prerequisite pick modal ──────────────────────────────────────────────── */
   #prereq-modal-backdrop {
@@ -3364,6 +3376,12 @@
     <div class="chars-upload-label">📂 Import Character</div>
     <button class="chars-upload-btn" onclick="triggerCharacterUpload()">⬆ Upload JSON</button>
     <input type="file" id="chars-json-upload" accept=".json" style="display:none" onchange="handleCharacterJsonUpload(event)">
+  </div>
+  <div class="chars-library-bar">
+    <div class="chars-upload-label">📚 Custom Library</div>
+    <button class="chars-upload-btn export" onclick="downloadLibraryJson()">⬇ Export Library JSON</button>
+    <button class="chars-upload-btn" onclick="triggerLibraryUpload()">⬆ Import Library JSON</button>
+    <input type="file" id="library-json-upload" accept=".json" style="display:none" onchange="handleLibraryJsonUpload(event)">
   </div>
 </div>
 

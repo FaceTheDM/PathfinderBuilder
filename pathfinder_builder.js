@@ -20922,7 +20922,7 @@ function _reconcileCustomStubs() {
 function saveToCustomLibrary(item) {
   try {
     const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
-    const key = item.type + 's';
+    const key = _CC_TYPE_PLURAL[item.type] || (item.type + 's');
     if (!lib[key]) lib[key] = [];
     // Avoid duplicate IDs
     lib[key] = lib[key].filter(x => x.id !== item.id);
@@ -20937,7 +20937,7 @@ function saveToCustomLibrary(item) {
 function getCustomLibrary(type) {
   try {
     const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
-    return lib[type + 's'] || [];
+    return lib[_CC_TYPE_PLURAL[type] || (type + 's')] || [];
   } catch { return []; }
 }
 
@@ -21922,6 +21922,30 @@ function deleteCustomContent(id) {
 const _CC_TYPE_ICONS = {
   feat: '⚔', trait: '🌟', race: '🧬', spell: '✨', class: '📜', item: '🪄', ability: '💡'
 };
+// Correct English plurals — using type+'s' breaks 'class'→'classs' and 'ability'→'abilitys'
+const _CC_TYPE_PLURAL = {
+  feat: 'feats', trait: 'traits', race: 'races', spell: 'spells',
+  class: 'classes', item: 'items', ability: 'abilities'
+};
+// One-time migration: rename bad keys left by the old type+'s' logic
+function _migrateCustomLibraryKeys() {
+  try {
+    const raw = localStorage.getItem('customLibrary');
+    if (!raw) return;
+    const lib = JSON.parse(raw);
+    const renames = { classs: 'classes', abilitys: 'abilities' };
+    let changed = false;
+    for (const [bad, good] of Object.entries(renames)) {
+      if (!lib[bad] || !lib[bad].length) { if (lib[bad] !== undefined) { delete lib[bad]; changed = true; } continue; }
+      if (!lib[good]) lib[good] = [];
+      const seen = new Set(lib[good].map(x => x.id));
+      lib[bad].forEach(item => { if (!seen.has(item.id)) lib[good].push(item); });
+      delete lib[bad];
+      changed = true;
+    }
+    if (changed) localStorage.setItem('customLibrary', JSON.stringify(lib));
+  } catch(e) { console.warn('Custom library migration failed:', e); }
+}
 const _CC_TYPE_COLORS = {
   feat:    {bg:'rgba(212,184,74,0.10)',  border:'rgba(212,184,74,0.35)',  text:'#d4b84a'},
   trait:   {bg:'rgba(200,122,212,0.10)', border:'rgba(200,122,212,0.35)', text:'#c87ad4'},
@@ -21970,16 +21994,15 @@ function _editLibraryItem(libId) {
 }
 
 function _deleteLibraryItem(libId) {
-  const typeOrder = ['feat','trait','race','spell','class','item','ability'];
+  _migrateCustomLibraryKeys();
   const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
+  const typeOrder = Object.values(_CC_TYPE_PLURAL); // ['feats','traits','races','spells','classes','items','abilities']
   for (const t of typeOrder) {
-    if (!lib[t]) continue;
-    const items = Array.isArray(lib[t]) ? lib[t] : Object.values(lib[t]);
-    const idx = items.findIndex(x => x.id === libId);
+    if (!lib[t] || !lib[t].length) continue;
+    const idx = lib[t].findIndex(x => x.id === libId);
     if (idx >= 0) {
-      const name = items[idx].name;
-      items.splice(idx, 1);
-      lib[t] = items;
+      const name = lib[t][idx].name;
+      lib[t].splice(idx, 1);
       localStorage.setItem('customLibrary', JSON.stringify(lib));
       renderCustomPage();
       showToast(`"${name}" removed from library`);
@@ -23037,6 +23060,74 @@ function handleCharacterJsonUpload(event) {
       if (btn) btn.classList.add('has-name');
     } catch (err) {
       showToast('Failed to parse JSON', 'warning');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ── Custom Library JSON Export / Import ──────────────────────────────────────
+function downloadLibraryJson() {
+  try {
+    const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
+    const types = ['feats','traits','races','spells','classes','items','abilities'];
+    let totalItems = 0;
+    types.forEach(t => { totalItems += (lib[t] || []).length; });
+    if (totalItems === 0) { showToast('Library is empty — nothing to export', 'warning'); return; }
+    const exportData = {
+      _format: 'pf1e-custom-library',
+      _version: 1,
+      exportedAt: Date.now(),
+      library: lib
+    };
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `custom_library_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Library exported — ${totalItems} item${totalItems !== 1 ? 's' : ''}`);
+  } catch(e) {
+    showToast('Export failed: ' + e.message, 'warning');
+  }
+}
+
+function triggerLibraryUpload() {
+  const input = document.getElementById('library-json-upload');
+  if (input) { input.value = ''; input.click(); }
+}
+
+function handleLibraryJsonUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      // Accept both the wrapped export format and a raw library object
+      const incoming = (data._format === 'pf1e-custom-library' && data.library) ? data.library : data;
+      const types = ['feats','traits','races','spells','classes','items','abilities'];
+      const hasAny = types.some(t => Array.isArray(incoming[t]) && incoming[t].length > 0);
+      if (!hasAny) { showToast('Invalid library JSON — no content found', 'warning'); return; }
+
+      const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
+      let added = 0, skipped = 0;
+      types.forEach(t => {
+        if (!Array.isArray(incoming[t])) return;
+        if (!lib[t]) lib[t] = [];
+        const existingIds = new Set(lib[t].map(x => x.id));
+        incoming[t].forEach(item => {
+          if (existingIds.has(item.id)) { skipped++; }
+          else { lib[t].push(item); added++; }
+        });
+      });
+      localStorage.setItem('customLibrary', JSON.stringify(lib));
+      renderCustomPage();
+      let msg = `Library imported — ${added} item${added !== 1 ? 's' : ''} added`;
+      if (skipped > 0) msg += `, ${skipped} duplicate${skipped !== 1 ? 's' : ''} skipped`;
+      showToast(msg);
+    } catch(err) {
+      showToast('Failed to parse library JSON', 'warning');
     }
   };
   reader.readAsText(file);
