@@ -72,6 +72,8 @@ let character = { race:null, classes:[], favoredClassIndex:0, feats:[], traits:[
   featToggles:  {},           // featKey (lowercase) → true/false (active combat toggle)
   skillAbilityOverrides: {},  // skillName → ability key (e.g. 'Intimidate' → 'int') for ability-sub traits
   customSkillLines: [],       // string[] — custom Craft/Profession/Perform subcategory names
+  customContent: [],          // custom feats/traits/races/spells/classes/items/abilities
+  customPills: [],            // standalone custom modifier pills
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -523,7 +525,8 @@ const SOURCE_COLORS = {
   trait: {bg:'#2a1a2a', border:'#7a3a8a', text:'#c87ad4', label:'Trait'},
   item:  {bg:'#2a1a1a', border:'#8a3a3a', text:'#d47a7a', label:'Item'},
   misc:  {bg:'#1a1a1a', border:'#5a5a5a', text:'#aaaaaa', label:'Misc'},
-  size:  {bg:'#1a2a2a', border:'#3a8a7a', text:'#7ad4c8', label:'Size'},
+  size:   {bg:'#1a2a2a', border:'#3a8a7a', text:'#7ad4c8', label:'Size'},
+  custom: {bg:'rgba(130,90,200,0.10)', border:'rgba(130,90,200,0.38)', text:'#b085e0', label:'Custom'},
 };
 
 // ── Bonus tracking — array of {source, sourceType, stat, value, label} ──────
@@ -567,6 +570,28 @@ function recomputeStatBonuses() {
           source: raceName, sourceType: 'race', stat: 'size',
           value: raceData.size, label: raceData.size
         });
+      }
+    }
+
+    // ── Custom race stat mods (when race is a homebrew entry) ─────────────────
+    if (!raceData && character.race._customId) {
+      const _cr = (character.customContent || []).find(c => c.id === character.race._customId && c.type === 'race');
+      if (_cr && _cr.metadata) {
+        Object.entries(_cr.metadata.statMods || {}).forEach(([stat, val]) => {
+          if (!val) return;
+          bonuses.push({
+            source: raceName, sourceType: 'race', stat, value: val,
+            label: (val > 0 ? '+' : '') + val + ' ' + stat.toUpperCase() + ' (Custom Race)'
+          });
+        });
+        const spd = _cr.metadata.speed;
+        if (spd && spd !== 30) {
+          bonuses.push({ source: raceName, sourceType: 'race', stat: 'speed', value: spd, label: spd + ' ft base' });
+        }
+        const sz = _cr.metadata.size;
+        if (sz && sz !== 'Medium') {
+          bonuses.push({ source: raceName, sourceType: 'race', stat: 'size', value: sz, label: sz });
+        }
       }
     }
 
@@ -883,6 +908,46 @@ function recomputeStatBonuses() {
     }
   }
 
+  // ── Standalone custom pills ───────────────────────────────────────────────
+  (character.customPills || []).filter(p => !p.linkedContentId).forEach(p => {
+    if (!p.stat) return;
+    bonuses.push({
+      source: p.label,
+      sourceType: 'custom',
+      stat: p.stat,
+      value: p.value,
+      label: `${p.value > 0 ? '+' : ''}${p.value} ${p.label}`,
+      conditional: p.conditional || null,
+      _customColor: p.color || null,
+      _customPillId: p.id || null,
+      _outlineStyle: p.outlineStyle || 'solid',
+    });
+  });
+
+  // ── Custom content auto-calc pills linked to their parent entry ───────────
+  (character.customContent || []).forEach(cc => {
+    const bonusList = cc.autoCalc ? (cc.parsedBonuses || []) : (cc.manualBonuses || []);
+    // Find any linked pills for this content entry
+    const linkedPills = (character.customPills || []).filter(p => p.linkedContentId === cc.id);
+    bonusList.forEach(b => {
+      if (!b.stat) return;
+      // Check if there's a matching linked pill for styling
+      const lp = linkedPills.find(p => p.stat === b.stat);
+      bonuses.push({
+        source: cc.name,
+        sourceType: 'custom',
+        stat: b.stat,
+        value: b.value,
+        label: `${b.value > 0 ? '+' : ''}${b.value} ${_STAT_PILL_LABEL[b.stat] || (b.stat.startsWith('skill_') ? b.stat.replace('skill_', '') : b.stat)} (${cc.name})`,
+        conditional: b.conditional || null,
+        _customColor: lp ? (lp.color || null) : null,
+        _customPillId: lp ? (lp.id || null) : null,
+        _outlineStyle: lp ? (lp.outlineStyle || 'solid') : 'dashed',
+        _linkedContentId: cc.id,
+      });
+    });
+  });
+
   character.statBonuses = bonuses;
 }
 
@@ -979,6 +1044,29 @@ function getEncumbrance() {
 
 // ── Parse class progression table to extract BAB + base saves for a level ──
 function parseClassProgression(cls) {
+  // ── Custom class progression — generated from metadata ───────────────────
+  if (cls.isCustom && cls._customId) {
+    const _cc = (character.customContent || []).find(c => c.id === cls._customId && c.type === 'class');
+    if (_cc && _cc.metadata) {
+      const level = parseInt(cls.level) || 1;
+      const m = _cc.metadata;
+      const _bab = {
+        full: level,
+        '3/4': Math.floor(level * 0.75),
+        '1/2': Math.floor(level * 0.5),
+      }[m.bab || '3/4'] ?? Math.floor(level * 0.75);
+      const _saveGood = (lv) => 2 + Math.floor(lv / 2);
+      const _savePoor = (lv) => Math.floor(lv / 3);
+      return {
+        bab:  _bab,
+        fort: (m.fortSave === 'good' ? _saveGood : _savePoor)(level),
+        ref:  (m.refSave  === 'good' ? _saveGood : _savePoor)(level),
+        will: (m.willSave === 'good' ? _saveGood : _savePoor)(level),
+      };
+    }
+    return null;
+  }
+
   const tables = cls._classTables;
   if (!tables || !tables.length) return null;
   const level = parseInt(cls.level) || 1;
@@ -2119,6 +2207,30 @@ function buildClassFeaturesHtml(full, clsLevel, archetypes, clsColor, secondaryF
         if (name && name !== '—' && name.length > 1) levelFeatures[lvl].push(name);
       });
     }
+  }
+
+  // ── Custom class features — rendered from metadata.features ──────────────
+  if (full && full.isCustom && full._customId) {
+    const _ccEntry = (character.customContent || []).find(c => c.id === full._customId);
+    if (_ccEntry && _ccEntry.metadata && _ccEntry.metadata.features && _ccEntry.metadata.features.length) {
+      const clsCol = clsColor || '#7ac87a';
+      let html = '<div>';
+      for (const feat of _ccEntry.metadata.features) {
+        const typeTag = feat.type ? ` <span style="color:var(--text-muted);font-size:0.6rem;font-family:sans-serif;">${feat.type}</span>` : '';
+        const bodyHtml = feat.body ? `<div class="char-cf-row-body" style="display:none;">${feat.body.replace(/\n/g, '<br>')}</div>` : '';
+        html += `
+        <div class="char-cf-row" style="border-left:3px solid ${clsCol};">
+          <div class="char-cf-row-header" onclick="event.stopPropagation();(function(h){const b=h.nextElementSibling,a=h.querySelector('.char-cf-arr');if(!b)return;const open=b.style.display!=='block';b.style.display=open?'block':'none';a.style.transform=open?'rotate(90deg)':'rotate(0deg)';})(this)">
+            <span class="char-cf-arr" style="color:${clsCol};">▸</span>
+            <span class="char-cf-name">${feat.name}${typeTag}</span>
+          </div>
+          ${bodyHtml}
+        </div>`;
+      }
+      html += '</div>';
+      return html;
+    }
+    return ''; // Custom class with no parsed features yet
   }
 
   if (!Object.keys(levelFeatures).length) return '';
@@ -4134,11 +4246,146 @@ function populateFilters(category, items) {
 function renderData(category, items) {
   const cont=document.getElementById(`${category}-content`); if(!cont) return;
   cont.innerHTML='';
-  if (!items.length) {
+
+  // Inject custom content entries at the top for relevant categories
+  const customTypeForCat = {
+    feats: 'feat', traits: 'trait', races: 'race', spells: 'spell', classes: 'class', equipment: 'item'
+  }[category];
+  if (customTypeForCat) {
+    const customItems = (character.customContent || []).filter(cc => cc.type === customTypeForCat);
+    if (customItems.length) {
+      const customRow = document.createElement('div');
+      customRow.style.cssText = 'grid-column:1/-1;display:flex;flex-wrap:wrap;gap:0.65rem;margin-bottom:0.75rem;padding:0.6rem 0.6rem 0.8rem;background:rgba(130,90,200,0.06);border:1px solid rgba(130,90,200,0.2);border-radius:8px;';
+      customRow.innerHTML = `<div style="width:100%;font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.12em;color:#b085e0;margin-bottom:0.3rem;">✦ Custom ${category.charAt(0).toUpperCase()+category.slice(1)}</div>`;
+      customItems.forEach(cc => {
+        const card = document.createElement('div');
+        card.style.cssText = `background:rgba(130,90,200,0.10);border:1px solid rgba(130,90,200,0.3);border-radius:7px;padding:0.55rem 0.75rem;cursor:pointer;flex:0 0 auto;max-width:220px;transition:background 0.15s;`;
+        card.onmouseover = () => { card.style.background = 'rgba(130,90,200,0.18)'; };
+        card.onmouseout  = () => { card.style.background = 'rgba(130,90,200,0.10)'; };
+        card.innerHTML = `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:0.4rem;margin-bottom:0.2rem;">
+            <span style="font-family:Cinzel,serif;font-size:0.82rem;color:var(--text-primary);">${cc.name}</span>
+            <span style="font-family:Cinzel,serif;font-size:0.55rem;text-transform:uppercase;color:#b085e0;letter-spacing:0.06em;background:rgba(130,90,200,0.2);border-radius:3px;padding:1px 4px;">CUSTOM</span>
+          </div>
+          ${cc.body ? `<div style="font-size:0.75rem;color:var(--text-secondary);line-height:1.4;">${(cc.body||'').slice(0,80)}${cc.body.length>80?'…':''}</div>` : ''}
+          <div style="display:flex;gap:0.35rem;margin-top:0.4rem;">
+            <button onclick="event.stopPropagation();editCustomContent('${cc.id}')" style="background:rgba(130,90,200,0.15);border:1px solid rgba(130,90,200,0.3);border-radius:4px;color:#b085e0;font-family:Cinzel,serif;font-size:0.6rem;padding:0.15rem 0.4rem;cursor:pointer;">Edit</button>
+            <button onclick="event.stopPropagation();_addCustomToChar('${cc.id}','${category}')" style="background:rgba(100,180,120,0.12);border:1px solid rgba(100,180,120,0.3);border-radius:4px;color:#80c890;font-family:Cinzel,serif;font-size:0.6rem;padding:0.15rem 0.4rem;cursor:pointer;">Add to Character</button>
+          </div>
+        `;
+        customRow.appendChild(card);
+      });
+      cont.appendChild(customRow);
+    }
+  }
+
+  if (!items.length && !customTypeForCat) {
     cont.innerHTML=`<div style="grid-column:1/-1;text-align:center;padding:4rem 2rem;"><div style="font-size:3rem;margin-bottom:1rem;opacity:0.3;">📭</div><div style="font-family:Cinzel,serif;color:var(--text-secondary);">No ${category} found</div></div>`;
     return;
   }
+  if (!items.length) return;
   items.forEach(item=>cont.appendChild(createCard(category,item)));
+}
+
+// Add a custom content entry to the character as the appropriate type.
+// Pass silent=true to suppress the toast (used when called from saveCustomContentModal
+// which shows its own confirmation toast).
+function _addCustomToChar(customId, category, silent = false) {
+  const cc = (character.customContent || []).find(c => c.id === customId);
+  if (!cc) return;
+  const name = cc.name;
+  if (category === 'feats') {
+    if ((character.feats || []).find(f => (f._customId === customId) || (f.name || f._name) === name)) {
+      if (!silent) showToast(`"${name}" already in feats`);
+      return;
+    }
+    if (!character.feats) character.feats = [];
+    // Enrich stub with custom content data so createCard() and the detail panel can render it correctly
+    const _rawFeatType = (cc.metadata && cc.metadata.featType) || 'General';
+    // Normalize to title-case so TYPE_COLORS lookup works ('combat' → 'Combat')
+    const featType = _rawFeatType.charAt(0).toUpperCase() + _rawFeatType.slice(1);
+    character.feats.push({
+      name,
+      source: 'level',
+      isCustom: true,
+      _customId: customId,
+      type: featType,
+      description: cc.body || '',
+      benefit: cc.body || '',
+      prerequisites: (cc.metadata && cc.metadata.prerequisites) || '',
+      _source: 'Custom',
+    });
+    updateBadge(); recomputeStatBonuses();
+    if (!silent) showToast(`"${name}" added to feats`);
+    if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  } else if (category === 'traits') {
+    if ((character.traits || []).find(t => (t._customId === customId) || (t.name || t._name) === name)) {
+      if (!silent) showToast(`"${name}" already in traits`);
+      return;
+    }
+    if (!character.traits) character.traits = [];
+    // Enrich stub with custom content data so createCard() and the detail panel can render it correctly
+    const traitType = (cc.metadata && cc.metadata.traitType) || 'Basic';
+    character.traits.push({
+      name,
+      isCustom: true,
+      _customId: customId,
+      type: traitType,
+      subtype: traitType.toLowerCase(),
+      description: cc.body || '',
+      _source: 'Custom',
+    });
+    updateBadge(); recomputeStatBonuses();
+    if (!silent) showToast(`"${name}" added to traits`);
+    if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  } else if (category === 'spells') {
+    if (!character.knownSpells) character.knownSpells = {};
+    const spellClass = (cc.metadata && cc.metadata.spellClass) || 'Custom';
+    const spellLevel = parseInt((cc.metadata && cc.metadata.spellLevel) || 0);
+    const classKey = spellClass.toLowerCase();
+    if (!character.knownSpells[classKey]) character.knownSpells[classKey] = {};
+    if (!character.knownSpells[classKey][spellLevel]) character.knownSpells[classKey][spellLevel] = [];
+    const existing = character.knownSpells[classKey][spellLevel];
+    if (existing.some(s => s._customId === customId || s.name === name)) {
+      if (!silent) showToast(`"${name}" already in spell list`);
+      return;
+    }
+    existing.push({
+      name,
+      isCustom: true,
+      _customId: customId,
+      school: (cc.metadata && cc.metadata.school) || '',
+      level: spellLevel,
+      _source: 'Custom',
+      description: cc.body || '',
+    });
+    updateBadge();
+    if (!silent) showToast(`"${name}" added to ${spellClass} spells (level ${spellLevel})`);
+    if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  } else if (category === 'equipment') {
+    if (!character.equipment) character.equipment = [];
+    if (character.equipment.some(e => e._customId === customId || e.name === name)) {
+      if (!silent) showToast(`"${name}" already in equipment`);
+      return;
+    }
+    character.equipment.push({
+      name,
+      isCustom: true,
+      _customId: customId,
+      slot: (cc.metadata && cc.metadata.slot) || 'None',
+      weight: parseFloat((cc.metadata && cc.metadata.weight) || 0) || 0,
+      price: (cc.metadata && cc.metadata.price) || '',
+      _source: 'Custom',
+      description: cc.body || '',
+      type: 'wondrous',
+    });
+    recomputeStatBonuses();
+    updateBadge();
+    if (!silent) showToast(`"${name}" added to equipment`);
+    if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  } else {
+    if (!silent) showToast(`Open the Custom page to use this ${cc.type} in your build`);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6256,19 +6503,32 @@ function createCard(category, item, opts = {}) {
       }
     }
   } else if (category === 'feats' || category === 'traits') {
-    const typeColor = TYPE_COLORS[item.type] || '#6a6a6a';
+    // Normalize type key to title-case so 'combat' matches 'Combat' in TYPE_COLORS
+    const _typeKeyNorm = item.type ? (item.type.charAt(0).toUpperCase() + item.type.slice(1)) : '';
+    const typeColor = TYPE_COLORS[item.type] || TYPE_COLORS[_typeKeyNorm] || '#6a6a6a';
     card.style.borderColor = typeColor;
-    const typeLabel = item.type || (category === 'feats' ? 'General' : 'Basic');
+    const typeLabel = _typeKeyNorm || (category === 'feats' ? 'General' : 'Basic');
     const typeIcon  = category === 'feats' ? getFeatIcon(item) : getTraitIcon(item);
 
+    // For custom feats/traits, prefer the body text from the custom content entry directly,
+    // since official look-up maps (featBenefitMap, traitBodyMap) won't contain homebrew entries.
+    // Declared here (before prereqBlock) so it's available in both the prereq and body sections.
+    const _ccEntry = (item.isCustom && item._customId)
+      ? (character.customContent || []).find(c => c.id === item._customId)
+      : null;
+
     // Feats: prereqs block shown ABOVE the description
+    // For custom feats, fall back to the custom content entry's prerequisites metadata field
     let prereqBlock = '';
     if (category === 'feats') {
-      if (item.prerequisites && item.prerequisites.trim()) {
+      const _prereqs = item.prerequisites
+        || (_ccEntry && _ccEntry.metadata && _ccEntry.metadata.prerequisites)
+        || '';
+      if (_prereqs && _prereqs.trim()) {
         prereqBlock = `
           <div style="background:${typeColor}11;border:1px solid ${typeColor}33;border-radius:5px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;">
             <div style="font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;color:${typeColor};opacity:0.85;margin-bottom:0.25rem;">Prerequisites</div>
-            <div style="font-size:0.88rem;color:var(--text-secondary);line-height:1.5;">${item.prerequisites}</div>
+            <div style="font-size:0.88rem;color:var(--text-secondary);line-height:1.5;">${_prereqs}</div>
           </div>`;
       } else {
         prereqBlock = `
@@ -6276,14 +6536,15 @@ function createCard(category, item, opts = {}) {
       }
     }
 
-    // Traits: use traitBodyMap if available, fall back to description
+    // Traits: use traitBodyMap if available, fall back to custom content body, then description
     const traitBody = category === 'traits'
-      ? (traitBodyMap[name.toLowerCase()] || item.description || item.benefit || '')
+      ? ((_ccEntry && _ccEntry.body) || traitBodyMap[name.toLowerCase()] || item.description || item.benefit || '')
       : '';
     const featBody = category === 'feats'
-      ? (featShowSummary
+      ? ((_ccEntry && _ccEntry.body) ||
+         (featShowSummary
           ? (item.description || item.benefit || '')   // summary = short index description
-          : (featBenefitMap[name.toLowerCase()] || item.benefit || item.description || ''))  // benefit = full Benefit section
+          : (featBenefitMap[name.toLowerCase()] || item.benefit || item.description || '')))  // benefit = full Benefit section
       : '';
     const bodyText = category === 'feats' ? (featBody || desc) : (traitBody || desc);
 
@@ -6403,7 +6664,20 @@ function createCard(category, item, opts = {}) {
   }
   
   card.addEventListener('click', () => openDetail(category, item));
-  
+
+  // CUSTOM micro-tag — injected as a positioned badge on any custom item.
+  // Suppressed on the character page (opts.suppressCustomBadge) because wrapCharCard places
+  // a ✕ remove button at top-right and the badge would collide with it. The character page
+  // already renders its own "✦ Custom Homebrew" tag via extraButtonsFn.
+  if (item.isCustom && !opts.suppressCustomBadge) {
+    const _badge = document.createElement('span');
+    _badge.textContent = 'CUSTOM';
+    _badge.style.cssText = 'position:absolute;top:6px;right:8px;font-size:0.6rem;font-family:Cinzel,serif;letter-spacing:0.1em;text-transform:uppercase;background:rgba(130,90,200,0.22);border:1px solid rgba(130,90,200,0.5);color:#b085e0;border-radius:3px;padding:1px 5px;pointer-events:none;z-index:2;';
+    // Ensure the card is a positioning context
+    if (!card.style.position || card.style.position === 'static') card.style.position = 'relative';
+    card.appendChild(_badge);
+  }
+
   return card;
 }
 
@@ -6417,7 +6691,8 @@ function getClassColor(item) {
 
 function getItemColor(category, item) {
   if (category === 'feats' || category === 'traits') {
-    return TYPE_COLORS[item.type] || '#6a6a6a';
+    const _typeNorm = item.type ? (item.type.charAt(0).toUpperCase() + item.type.slice(1)) : '';
+    return TYPE_COLORS[item.type] || TYPE_COLORS[_typeNorm] || '#6a6a6a';
   }
   if (category === 'classes') {
     return getClassColor(item);
@@ -9810,8 +10085,9 @@ const MAGIC_ITEM_STAT_PATTERNS = [
 const _STAT_PILL_LABEL = {
   str:'STR', dex:'DEX', con:'CON', int:'INT', wis:'WIS', cha:'CHA',
   fort_misc:'Fort', ref_misc:'Ref', will_misc:'Will',
-  ac_natural:'Natural Armor', ac_deflect:'Deflection', ac_armor:'Armor',
-  ac_misc:'AC',
+  ac_natural:'Natural Armor', ac_deflect:'Deflection', ac_armor:'Armor', ac_shield:'Shield AC',
+  ac_misc:'AC', init_misc:'Initiative', bab_misc:'BAB', cmb_misc:'CMB', cmd_misc:'CMD',
+  hp:'HP', speed:'Speed', conc_misc:'Concentration',
 };
 
 // ─── Level-gated choice types ─────────────────────────────────────────────────
@@ -12619,6 +12895,71 @@ function buildFeatDetailHtml(item) {
   const prereqs   = item.prerequisites || '';
   const color     = getItemColor('feats', item);
   const key       = name.toLowerCase();
+
+  // For custom feats, _ccRef is attached by openDetailSync — use it directly so the
+  // detail panel shows the homebrew body instead of empty DB look-ups.
+  const _cc = item._ccRef || ((item.isCustom && item._customId)
+    ? (character.customContent || []).find(c => c.id === item._customId)
+    : null);
+
+  if (_cc) {
+    // ── Custom Feat Detail ────────────────────────────────────────────────────
+    const ccColor  = getItemColor('feats', { type: (_cc.metadata && _cc.metadata.featType) || 'General' });
+    const ccPrereqs = (_cc.metadata && _cc.metadata.prerequisites) || prereqs || '';
+    const ccBenefitText = _cc.body || '';
+    const allBonuses = _cc.autoCalc ? _cc.parsedBonuses : _cc.manualBonuses;
+
+    let html = '';
+
+    // Prerequisites
+    if (ccPrereqs && ccPrereqs.trim()) {
+      html += `
+        <div style="background:${ccColor}11;border:1px solid ${ccColor}33;border-left:3px solid ${ccColor}66;border-radius:0 6px 6px 0;padding:0.65rem 1rem;margin-bottom:1.25rem;">
+          <div style="font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.12em;color:${ccColor};opacity:0.85;margin-bottom:0.3rem;">Prerequisites</div>
+          <div style="color:var(--text-secondary);font-size:0.92rem;line-height:1.6;">${ccPrereqs}</div>
+        </div>`;
+    } else {
+      html += `
+        <div style="display:inline-block;background:${ccColor}14;border:1px solid ${ccColor}33;border-radius:4px;padding:3px 10px;font-family:Cinzel,serif;font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;color:${ccColor};opacity:0.75;margin-bottom:1.1rem;">No Prerequisites</div>`;
+    }
+
+    // Benefit / description body
+    if (ccBenefitText) {
+      html += `
+        <div style="margin-bottom:1.25rem;">
+          <div style="font-family:Cinzel,serif;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--gold);opacity:0.85;margin-bottom:0.4rem;padding-bottom:0.3rem;border-bottom:1px solid rgba(201,168,76,0.18);">Description</div>
+          <div style="color:var(--text-primary);font-size:0.93rem;line-height:1.75;">${ccBenefitText}</div>
+        </div>`;
+    } else {
+      html += `<div style="color:var(--text-muted);font-style:italic;margin-bottom:1rem;">No description provided.</div>`;
+    }
+
+    // Stat bonuses extracted from auto-calc or manually entered
+    if (allBonuses && allBonuses.length > 0) {
+      html += `
+        <div style="margin-bottom:1.25rem;">
+          <div style="font-family:Cinzel,serif;font-size:0.68rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--text-muted);margin-bottom:0.5rem;padding-bottom:0.3rem;border-bottom:1px solid var(--border);">${_cc.autoCalc ? 'Auto-Detected Bonuses' : 'Manual Bonuses'}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+            ${allBonuses.map(b => `
+              <span style="font-family:Cinzel,serif;font-size:0.72rem;padding:0.2rem 0.55rem;border-radius:4px;background:rgba(100,180,130,0.12);border:1px solid rgba(100,180,130,0.3);color:#80c890;white-space:nowrap;">
+                ${b.value >= 0 ? '+' : ''}${b.value} ${(b.stat || '').replace(/_/g,' ')}${b.conditional ? ` <span style="color:var(--text-muted);font-size:0.65rem;">(${b.conditional})</span>` : ''}
+              </span>`).join('')}
+          </div>
+        </div>`;
+    }
+
+    // Edit button
+    html += `
+      <div style="margin-top:0.5rem;">
+        <button onclick="editCustomContent('${_cc.id}')" style="font-family:Cinzel,serif;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.07em;padding:0.4rem 1rem;background:rgba(130,90,200,0.12);border:1px solid rgba(130,90,200,0.35);border-radius:5px;color:#b085e0;cursor:pointer;transition:background 0.15s;"
+          onmouseover="this.style.background='rgba(130,90,200,0.22)'" onmouseout="this.style.background='rgba(130,90,200,0.12)'">
+          ✦ Edit Custom Feat
+        </button>
+      </div>`;
+
+    return html;
+  }
+
   // Use the already-loaded body maps populated at startup
   const benefit   = (typeof featBenefitMap !== 'undefined' && featBenefitMap[key]) || item.benefit || item.description || '';
   const fullBody  = (typeof featBodyMap    !== 'undefined' && featBodyMap[key])    || '';
@@ -12695,6 +13036,25 @@ function buildFeatDetailHtml(item) {
 
 
 function openDetailSync(category, item) {
+  // For custom feats/traits, enrich the item with the full custom content entry before
+  // any rendering — this ensures the detail panel shows description, prereqs, and type
+  // rather than blank fields (official DB maps won't contain homebrew entries).
+  if (item && item.isCustom && item._customId) {
+    const _ccDtl = (character.customContent || []).find(c => c.id === item._customId);
+    if (_ccDtl) {
+      item = {
+        ...item,
+        description: _ccDtl.body || item.description || '',
+        benefit:     _ccDtl.body || item.benefit || '',
+        body:        _ccDtl.body || '',
+        type:        item.type || (_ccDtl.metadata && (_ccDtl.metadata.featType || _ccDtl.metadata.traitType)) || 'General',
+        prerequisites: item.prerequisites || (_ccDtl.metadata && _ccDtl.metadata.prerequisites) || '',
+        _source:     'Custom',
+        _ccRef:      _ccDtl,   // keep a reference for the feat detail builder
+      };
+    }
+  }
+
   currentDetail = item;
   lastPage = category;
 
@@ -13338,33 +13698,38 @@ function filterData(category) {
       });
     }
   } else if (category === 'feats') {
-    const typeFilter = document.getElementById('filter-feat-type').value;
-    if (typeFilter) {
-      filtered = filtered.filter(f => f.type === typeFilter);
-    }
-    const noPrereq = document.getElementById('filter-feat-no-prereq')?.checked;
-    if (noPrereq) {
-      filtered = filtered.filter(f => !f.prerequisites || f.prerequisites.trim() === '');
-    }
-    const prereqsMet = document.getElementById('filter-feat-prereqs-met')?.checked;
-    if (prereqsMet && typeof checkFeatPrereqs === 'function') {
-      filtered = filtered.filter(f => {
-        if (!f.prerequisites || f.prerequisites.trim() === '') return true; // no prereqs = always met
-        return checkFeatPrereqs(f.prerequisites).met;
-      });
+    const customOnly = document.getElementById('filter-feat-custom')?.checked;
+    if (customOnly) {
+      // Show only the custom shelf — clear official results
+      filtered = [];
+    } else {
+      const typeFilter = document.getElementById('filter-feat-type').value;
+      if (typeFilter) filtered = filtered.filter(f => f.type === typeFilter);
+      const noPrereq = document.getElementById('filter-feat-no-prereq')?.checked;
+      if (noPrereq) filtered = filtered.filter(f => !f.prerequisites || f.prerequisites.trim() === '');
+      const prereqsMet = document.getElementById('filter-feat-prereqs-met')?.checked;
+      if (prereqsMet && typeof checkFeatPrereqs === 'function') {
+        filtered = filtered.filter(f => {
+          if (!f.prerequisites || f.prerequisites.trim() === '') return true;
+          return checkFeatPrereqs(f.prerequisites).met;
+        });
+      }
     }
   } else if (category === 'traits') {
-    const typeFilter = document.getElementById('filter-trait-type').value;
-    if (typeFilter) {
-      filtered = filtered.filter(t => t.type === typeFilter);
-    }
-    const prereqsMet = document.getElementById('filter-trait-prereqs-met')?.checked;
-    if (prereqsMet && typeof checkFeatPrereqs === 'function') {
-      filtered = filtered.filter(t => {
-        const prereqs = t.prerequisites || '';
-        if (!prereqs.trim()) return true;
-        return checkFeatPrereqs(prereqs).met;
-      });
+    const customOnly = document.getElementById('filter-trait-custom')?.checked;
+    if (customOnly) {
+      filtered = [];
+    } else {
+      const typeFilter = document.getElementById('filter-trait-type').value;
+      if (typeFilter) filtered = filtered.filter(t => t.type === typeFilter);
+      const prereqsMet = document.getElementById('filter-trait-prereqs-met')?.checked;
+      if (prereqsMet && typeof checkFeatPrereqs === 'function') {
+        filtered = filtered.filter(t => {
+          const prereqs = t.prerequisites || '';
+          if (!prereqs.trim()) return true;
+          return checkFeatPrereqs(prereqs).met;
+        });
+      }
     }
   } else if (category === 'equipment') {
     const typeFilter = document.getElementById('filter-equipment-type').value;
@@ -13893,7 +14258,8 @@ function buildStatsPanel() {
   }
   // fx() sums race/class feature bonuses for a stat key from the bonus system
   // These are separate from the user-entered s[key] value
-  function fx(statKey) { return getBonusesForStat(statKey).reduce((sum,b) => sum + (typeof b.value === 'number' ? b.value : 0), 0); }
+  // Conditional bonuses (e.g. "against that enemy") are informational only — skip in totals
+  function fx(statKey) { return getBonusesForStat(statKey).reduce((sum,b) => sum + (typeof b.value === 'number' && !b.conditional ? b.value : 0), 0); }
   // Max DEX cap: the lowest max_dex among equipped armor/shields (99 = uncapped).
   // Fighter Armor Training increases the cap by 1–4 (only when armor is limiting DEX).
   // Encumbrance caps DEX: medium → +3, heavy → +1.
@@ -14142,6 +14508,35 @@ function buildStatsPanel() {
     if (key) pillsCont.id = `stat-pills-${key}`;
     bdPanel.appendChild(pillsCont);
 
+    // "Add Custom Modifier" button — shown only for keyed stat boxes
+    if (key) {
+      const addPillBtn = document.createElement('button');
+      addPillBtn.style.cssText = `
+        display:block;width:100%;margin-top:0.4rem;
+        background:rgba(130,90,200,0.07);border:1px dashed rgba(130,90,200,0.3);
+        border-radius:5px;color:rgba(176,133,224,0.7);
+        font-family:Cinzel,serif;font-size:0.6rem;
+        text-transform:uppercase;letter-spacing:0.08em;
+        padding:0.25rem;cursor:pointer;transition:background 0.15s,color 0.15s,border-color 0.15s;
+      `;
+      addPillBtn.textContent = '+ Add Custom Modifier';
+      addPillBtn.onmouseover = () => {
+        addPillBtn.style.background = 'rgba(130,90,200,0.15)';
+        addPillBtn.style.color = '#b085e0';
+        addPillBtn.style.borderColor = 'rgba(130,90,200,0.5)';
+      };
+      addPillBtn.onmouseout = () => {
+        addPillBtn.style.background = 'rgba(130,90,200,0.07)';
+        addPillBtn.style.color = 'rgba(176,133,224,0.7)';
+        addPillBtn.style.borderColor = 'rgba(130,90,200,0.3)';
+      };
+      addPillBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        openCustomPillModal(key, null);
+      });
+      bdPanel.appendChild(addPillBtn);
+    }
+
     function refreshPills() {
       pillsCont.innerHTML = '';
       if (breakdownFn) { breakdownFn(pillsCont); return; }
@@ -14152,9 +14547,22 @@ function buildStatsPanel() {
         return;
       }
       bonuses.forEach(b => {
-        const c = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
+        const isCustom = b.sourceType === 'custom';
+        let c;
+        if (isCustom && b._customColor) {
+          // Derive bg/border/text from the user-chosen hex color
+          const hex = b._customColor;
+          c = {
+            bg: _hexToRgba(hex, 0.12),
+            border: _hexToRgba(hex, 0.42),
+            text: hex,
+          };
+        } else {
+          c = SOURCE_COLORS[b.sourceType] || SOURCE_COLORS.misc;
+        }
+        const outlineStyle = (isCustom && b._outlineStyle) ? b._outlineStyle : 'solid';
         const pill = document.createElement('div');
-        pill.style.cssText = `display:flex;align-items:center;gap:0.4rem;background:${c.bg};border:1px solid ${c.border};border-radius:5px;padding:0.22rem 0.5rem;margin-bottom:0.22rem;`;
+        pill.style.cssText = `display:flex;flex-wrap:wrap;align-items:center;gap:0.4rem;background:${c.bg};border:1.5px ${outlineStyle} ${c.border};border-radius:5px;padding:0.22rem 0.5rem;margin-bottom:0.22rem;position:relative;`;
         // For speed race bonuses, show as base replacement not additive
         let valDisplay = typeof b.value==='number'?(b.value>0?'+':'')+b.value:b.value;
         let srcDisplay = b.source;
@@ -14162,7 +14570,32 @@ function buildStatsPanel() {
           valDisplay = b.value + ' ft';
           srcDisplay = b.source + ' (base)';
         }
-        pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};letter-spacing:0.07em;">${srcDisplay}</span><span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.75rem;font-weight:700;color:${c.text};">${valDisplay}</span>`;
+        // Conditional bonuses — shown with ⚡ tag, value is italicised to signal "situational"
+        const condRow = b.conditional
+          ? `<span style="width:100%;font-family:Cinzel,serif;font-size:0.5rem;color:${c.text};opacity:0.7;font-style:italic;padding-top:0.1rem;line-height:1.4;">⚡ ${b.conditional}</span>`
+          : '';
+        if (isCustom) {
+          const pillId = b._customPillId;
+          const contentId = b._linkedContentId;
+          const editBtn = pillId
+            ? `<button onclick="event.stopPropagation();openCustomPillModal('${key}','${pillId}')" title="Edit modifier" style="background:none;border:none;color:${c.text};opacity:0.5;cursor:pointer;font-size:0.65rem;padding:0 0.2rem;transition:opacity 0.15s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.5'">✎</button>`
+            : '';
+          const delBtn = pillId
+            ? `<button onclick="event.stopPropagation();deleteCustomPill('${pillId}')" title="Remove modifier" style="background:none;border:none;color:#e08080;opacity:0.4;cursor:pointer;font-size:0.65rem;padding:0 0.2rem;transition:opacity 0.15s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.4'">✕</button>`
+            : '';
+          const viewSrc = contentId
+            ? `<button onclick="event.stopPropagation();switchPage('custom')" title="View source" style="background:none;border:none;color:${c.text};opacity:0.4;cursor:pointer;font-size:0.6rem;padding:0 0.2rem;transition:opacity 0.15s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.4'">↗</button>`
+            : '';
+          pill.innerHTML = `
+            <span style="position:absolute;top:1px;right:0.3rem;font-family:Cinzel,serif;font-size:0.5rem;text-transform:uppercase;letter-spacing:0.06em;color:${c.text};opacity:0.55;">CUSTOM</span>
+            <span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};letter-spacing:0.07em;padding-top:0.6rem;${b.conditional ? 'font-style:italic;' : ''}">${srcDisplay}</span>
+            <span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.75rem;font-weight:700;color:${c.text};padding-top:0.4rem;">${valDisplay}</span>
+            <span style="display:flex;align-items:center;gap:0;margin-left:0.1rem;">${editBtn}${delBtn}${viewSrc}</span>
+            ${condRow}
+          `;
+        } else {
+          pill.innerHTML = `<span style="font-family:Cinzel,serif;font-size:0.6rem;text-transform:uppercase;color:${c.text};letter-spacing:0.07em;">${srcDisplay}</span><span style="margin-left:auto;font-family:Cinzel Decorative,serif;font-size:0.75rem;font-weight:700;color:${c.text};">${valDisplay}</span>${condRow}`;
+        }
         pillsCont.appendChild(pill);
       });
     }
@@ -16347,6 +16780,24 @@ function getSkillBonuses() {
     add('Fly', { value: _flySizeMod, source: `Size (${_charSize})`, sourceType: 'size' });
   }
 
+  // 6. Custom content skill bonuses — from statBonuses with skill_* keys
+  // Catches manual bonuses and auto-parsed bonuses from custom content
+  // that target skills directly via their stat key (e.g. "skill_Perception")
+  (character.statBonuses || []).forEach(b => {
+    if (!b.stat || !b.stat.startsWith('skill_')) return;
+    if (b.sourceType !== 'custom') return; // Others are handled above
+    const skillName = b.stat.replace('skill_', '').replace(/_/g, ' ');
+    const canon = PF1E_SKILLS.find(s => s.name.toLowerCase() === skillName.toLowerCase());
+    if (canon) {
+      add(canon.name, {
+        value: b.value,
+        source: b.source,
+        sourceType: 'custom',
+        conditional: b.conditional || null,
+      });
+    }
+  });
+
   _cachedSkillBonuses = bonuses; // cache for trait card pill display (Phase 8d)
   return bonuses;
 }
@@ -17826,7 +18277,9 @@ function renderCardSection(container, title, category, items, onRemove, extraBut
     items.forEach((item, idx) => {
       const name = item.name || item._name;
       // suppressBrowseTags: the character page renders its own pill system below each card
-      const cardEl = createCard(category, item, { suppressBrowseTags: true });
+      // suppressCustomBadge: the character page renders its own "✦ Custom Homebrew" tag;
+      //   suppressing the absolute-positioned badge prevents it overlapping the remove button
+      const cardEl = createCard(category, item, { suppressBrowseTags: true, suppressCustomBadge: true });
       // Patch the Add/Remove button
       const btn = cardEl.querySelector('.card-btn');
       if (btn) { btn.textContent = 'Remove'; btn.onclick = e => { e.stopPropagation(); onRemove(name); }; }
@@ -18446,7 +18899,33 @@ function renderClassesSection(container) {
           if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
 
           // ── Progression table ─────────────────────────────────────────────
-          if (!tables || !tables.length) {
+          // Check for custom class progression table first
+          if (clsObj.isCustom && clsObj._customId) {
+            const _ccEntry = (character.customContent || []).find(c => c.id === clsObj._customId);
+            if (_ccEntry && _ccEntry.metadata && _ccEntry.metadata.parsedTable) {
+              const pt = _ccEntry.metadata.parsedTable;
+              let tableHtml = '<table class="class-progression-table" style="width:100%;border-collapse:collapse;font-size:0.65rem;">';
+              tableHtml += '<thead><tr>';
+              for (const h of pt.headers) {
+                tableHtml += `<th style="padding:0.25rem 0.4rem;border-bottom:2px solid ${clsColor};color:${clsColor};font-family:Cinzel,serif;text-align:center;">${h}</th>`;
+              }
+              tableHtml += '</tr></thead><tbody>';
+              for (let r = 0; r < pt.rows.length; r++) {
+                const isCurrentLevel = (r + 1) === clsLvl;
+                const rowStyle = isCurrentLevel ? `background:rgba(201,168,76,0.12);border-top:1px solid rgba(201,168,76,0.5);border-bottom:1px solid rgba(201,168,76,0.5);` : '';
+                tableHtml += `<tr style="${rowStyle}">`;
+                for (let c = 0; c < pt.headers.length; c++) {
+                  const cellContent = c === 0 && isCurrentLevel ? `<span style="color:var(--gold);font-weight:700;margin-right:3px;">★</span>${pt.rows[r][c] || ''}` : (pt.rows[r][c] || '');
+                  tableHtml += `<td style="padding:0.2rem 0.35rem;border-bottom:1px solid rgba(201,168,76,0.08);text-align:center;color:var(--text-body);">${cellContent}</td>`;
+                }
+                tableHtml += '</tr>';
+              }
+              tableHtml += '</tbody></table>';
+              tw.innerHTML = `<div style="overflow-x:auto;flex:1;">${tableHtml}</div>`;
+            } else {
+              tw.innerHTML = '<div class="char-class-table-spinner" style="opacity:0.4;font-size:0.65rem;">No table — edit class to paste a progression table.</div>';
+            }
+          } else if (!tables || !tables.length) {
             tw.innerHTML = '<div class="char-class-table-spinner" style="opacity:0.4;font-size:0.65rem;">No table available.</div>';
           } else {
             let tableHtml = '';
@@ -18699,11 +19178,22 @@ function renderClassesSection(container) {
           }
 
           // ── Class Features ────────────────────────────────────────────────
-          const featuresHtml = buildClassFeaturesHtml(full, clsLvl, clsObj.archetypes, clsColor, clsObj.secondaryFeatures, clsObj.levelChoices, clsObj.name || clsObj._name);
-          if (featuresHtml) {
-            fw.innerHTML = featuresHtml;
+          let featuresHtml;
+          if (clsObj.isCustom && clsObj._customId) {
+            // For custom classes, pass a stub with isCustom/_customId so buildClassFeaturesHtml
+            // can look up metadata.features from character.customContent
+            featuresHtml = buildClassFeaturesHtml(
+              { isCustom: true, _customId: clsObj._customId, sections: [], _classTables: [] },
+              clsLvl, [], clsColor, [], [], clsObj.name || clsObj._name
+            );
+            fw.innerHTML = featuresHtml || '<div class="char-class-table-spinner" style="opacity:0.4;font-size:0.65rem;">No features — edit class and paste its description to detect features.</div>';
           } else {
-            fw.innerHTML = '<div class="char-class-table-spinner" style="opacity:0.4;font-size:0.65rem;">No features data.</div>';
+            featuresHtml = buildClassFeaturesHtml(full, clsLvl, clsObj.archetypes, clsColor, clsObj.secondaryFeatures, clsObj.levelChoices, clsObj.name || clsObj._name);
+            if (featuresHtml) {
+              fw.innerHTML = featuresHtml;
+            } else {
+              fw.innerHTML = '<div class="char-class-table-spinner" style="opacity:0.4;font-size:0.65rem;">No features data.</div>';
+            }
           }
         } catch(e) {
           tw.innerHTML = '<div class="char-class-table-spinner" style="opacity:0.4;font-size:0.65rem;">Could not load.</div>';
@@ -19374,13 +19864,14 @@ function renderCharacter() {
     // ── Bonus summary pills — show what stat/skill bonuses this trait applies ──
     const _traitNameFx = (trait.name || trait._name || '').trim();
     const _traitNameKey = _traitNameFx.toLowerCase();
-    // Green: flat unconditional stat bonuses (saves, init, AC, conc) — value > 0
+    // Green: flat unconditional stat bonuses (saves, init, AC, conc) — value > 0, no condition
+    // Exclude skill_* stats — those are handled by _traitSkillBonuses below (avoids duplicates)
     const _traitStatBonuses = (character.statBonuses || []).filter(
-      b => b.source === _traitNameFx && b.stat !== '_info' && b.value > 0
+      b => b.source === _traitNameFx && b.stat !== '_info' && !b.stat.startsWith('skill_') && b.value > 0 && !b.conditional
     );
-    // Amber: conditional stat bonuses (cond_* stats) — value:0 but conditional field present
+    // Amber: conditional stat bonuses — either value:0 (pure conditional) or value>0 with condition text
     const _traitCondStatBonuses = (character.statBonuses || []).filter(
-      b => b.source === _traitNameFx && b.conditional && !b.value
+      b => b.source === _traitNameFx && b.conditional && !b.stat.startsWith('skill_') && b.stat !== '_info'
     );
     // Skill bonuses from cached getSkillBonuses() result (Phase 8d)
     // Populate cache if not yet set (e.g., character page visited before skills page)
@@ -19413,56 +19904,58 @@ function renderCharacter() {
                       _traitPenaltyNotes.length || _traitInfoTags.length || _abilOverride;
     if (_hasPills) {
       const pillRow = document.createElement('div');
-      pillRow.style.cssText = 'margin-top:0.45rem;display:flex;flex-wrap:wrap;gap:0.25rem;';
+      pillRow.style.cssText = 'margin-top:0.45rem;display:flex;flex-wrap:wrap;gap:0.25rem;min-width:0;';
+      // Shared pill base — truncates with ellipsis so pills never overflow the card width
+      const _tPillBase = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;min-width:0;';
       // Green: flat unconditional stat bonuses (saves, init, AC, concentration)
       for (const b of _traitStatBonuses) {
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;white-space:nowrap;';
+        pill.style.cssText = _tPillBase + 'background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;';
         // Strip trailing "(TraitName)" parenthetical — redundant on a trait's own card
         pill.textContent = (b.label || `${b.stat} +${b.value}`).replace(/\s*\([^)]+\)\s*$/, '');
+        pill.title = pill.textContent;
         pillRow.appendChild(pill);
       }
-      // Amber: conditional stat bonuses (not applied to totals)
+      // Amber: conditional stat bonuses (not applied to totals — value shown with condition)
       const _condStatSeen = new Set();
       for (const b of _traitCondStatBonuses) {
         const pillLabel = (b.label || '').replace(/\s*\([^)]+\)\s*$/, '').trim();
         if (!pillLabel || _condStatSeen.has(pillLabel)) continue;
         _condStatSeen.add(pillLabel);
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;white-space:nowrap;';
-        const condShort = b.conditional.length > 32 ? b.conditional.slice(0, 30) + '…' : b.conditional;
-        pill.textContent = `\u2605 ${pillLabel}`;
+        pill.style.cssText = _tPillBase + 'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;font-style:italic;';
+        // First clause only (up to comma/semicolon/" and "), then "+ Special" if there's more
+        const _tFirstClause = b.conditional.split(/,|;|\s+and\s+/)[0].trim();
+        const _tHasMoreCond = _tFirstClause.length < b.conditional.trim().length - 2;
+        // If the bonus has a numeric value, show it; pure conditionals (value:0) just show the label
+        pill.textContent = b.value
+          ? `\u2605 ${pillLabel} ${_tFirstClause}${_tHasMoreCond ? ' + Special' : ''}`
+          : `\u2605 ${pillLabel}`;
         pill.title = `Conditional: ${b.conditional}`;
         pillRow.appendChild(pill);
       }
       // Blue: unconditional skill bonuses (always applied)
       for (const sk of _traitSkillBonuses) {
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;white-space:nowrap;';
+        pill.style.cssText = _tPillBase + 'background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;';
         pill.textContent = `\u2191 ${sk.skill} +${sk.value}`;
         pillRow.appendChild(pill);
       }
       // Amber: conditional skill bonuses (situational — not auto-applied)
       for (const ck of _traitCondBonuses) {
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;white-space:nowrap;';
-        // Truncate long condition text on the pill; full text in title tooltip
-        const condShort = ck.conditional.length > 30 ? ck.conditional.slice(0, 28) + '…' : ck.conditional;
-        pill.textContent = `\u2605 ${ck.skill} +${ck.value} (${condShort})`;
+        pill.style.cssText = _tPillBase + 'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;';
+        const _ckFirst = ck.conditional.split(/,|;|\s+and\s+/)[0].trim();
+        const _ckHasMore = _ckFirst.length < ck.conditional.trim().length - 2;
+        pill.textContent = `\u2605 ${ck.skill} +${ck.value} ${_ckFirst}${_ckHasMore ? ' + Special' : ''}`;
         pill.title = `${ck.skill} +${ck.value} — conditional: ${ck.conditional}`;
         pillRow.appendChild(pill);
       }
       // Muted purple: penalty-reduction notes (e.g. Acrobat: -1 instead of -5 on Climb)
       for (const pn of _traitPenaltyNotes) {
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;white-space:nowrap;';
-        const noteShort = pn.note.length > 35 ? pn.note.slice(0, 33) + '…' : pn.note;
-        pill.textContent = `\u26a1 ${pn.skill}: ${noteShort}`;
+        pill.style.cssText = _tPillBase + 'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;';
+        pill.textContent = `\u26a1 ${pn.skill}: ${pn.note}`;
         pill.title = `${pn.skill}: ${pn.note}`;
         pillRow.appendChild(pill);
       }
@@ -19470,20 +19963,22 @@ function renderCharacter() {
       for (const tagText of _traitInfoTags) {
         if (!tagText) continue;
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;white-space:nowrap;';
+        pill.style.cssText = _tPillBase + 'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;';
         pill.textContent = tagText;
+        pill.title = tagText;
         pillRow.appendChild(pill);
       }
       // Purple: ability-score substitution override
       if (_abilOverride) {
         const pill = document.createElement('span');
-        pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-          'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;white-space:nowrap;';
+        pill.style.cssText = _tPillBase + 'background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);color:#b090d0;';
         pill.textContent = `\u2605 Uses ${_abilOverride.ability.toUpperCase()} for ${_abilOverride.skill}`;
         pillRow.appendChild(pill);
       }
-      appendTo.appendChild(pillRow);
+      // Insert pill row right after prereqs block (before .card-desc)
+      const _traitCardDesc = appendTo.querySelector('.card-desc');
+      if (_traitCardDesc) appendTo.insertBefore(pillRow, _traitCardDesc);
+      else appendTo.appendChild(pillRow);
     }
 
     // ── Skill choice pill — shows chosen class skill / bonus skill for choice traits ──
@@ -19553,21 +20048,47 @@ function renderCharacter() {
       }
     }
 
-    const replBtn = document.createElement('button');
-    replBtn.textContent = 'Replace';
-    replBtn.style.cssText = 'margin-top:0.55rem;width:100%;background:transparent;border:1px solid var(--gold);border-radius:5px;color:var(--gold);font-family:Cinzel,serif;font-size:0.72rem;padding:0.3rem 0.7rem;cursor:pointer;transition:background 0.15s;';
-    replBtn.onmouseover = () => { replBtn.style.background = 'rgba(201,168,76,0.12)'; };
-    replBtn.onmouseout  = () => { replBtn.style.background = 'transparent'; };
-    replBtn.onclick = e => {
-      e.stopPropagation();
-      // Remove the current trait and navigate to traits browse page so user can pick a replacement
-      const traitName = trait.name || trait._name;
-      character.traits = character.traits.filter(t => (t.name||t._name) !== traitName);
-      updateBadge();
-      switchPage('traits');
-      showToast(`Removed "${traitName}" — choose a replacement trait below.`, 'info');
-    };
-    appendTo.appendChild(replBtn);
+    // ── Custom homebrew tag for traits ──
+    if (trait && trait.isCustom) {
+      // Look up the custom content entry to get its type color
+      const _ccEntry = (character.customContent || []).find(c => c.id === trait._customId);
+      const _ccType = _ccEntry ? _ccEntry.type : 'trait';
+      // Use subtype color (Combat=red, Faith=gold, etc.) when available
+      const _subtypeKey = _ccEntry && _ccEntry.metadata && _ccEntry.metadata.traitType;
+      const _subtypeKeyTitle = _subtypeKey ? (_subtypeKey.charAt(0).toUpperCase() + _subtypeKey.slice(1)) : null;
+      const _subtypeHex = _subtypeKeyTitle ? TYPE_COLORS[_subtypeKeyTitle] : null;
+      const _ccColors = _subtypeHex
+        ? { bg: _hexToRgba(_subtypeHex, 0.10), border: _hexToRgba(_subtypeHex, 0.35), text: _subtypeHex }
+        : (_CC_TYPE_COLORS[_ccType] || _CC_TYPE_COLORS.trait);
+      const _subtypeLabel = _subtypeKeyTitle ? `${_subtypeKeyTitle} ` : '';
+      const tag = document.createElement('div');
+      tag.style.cssText = `margin-top:0.45rem;font-family:Cinzel,serif;font-size:0.65rem;color:${_ccColors.text};background:${_ccColors.bg};border:1px solid ${_ccColors.border};border-radius:4px;padding:0.2rem 0.5rem;text-align:center;letter-spacing:0.04em;display:flex;align-items:center;justify-content:center;gap:0.4rem;`;
+      tag.innerHTML = `✦ Custom ${_subtypeLabel}${_ccType.charAt(0).toUpperCase() + _ccType.slice(1)} &nbsp;·&nbsp; <button onclick="event.stopPropagation();editCustomContent('${trait._customId || ''}')" style="background:none;border:none;color:${_ccColors.text};cursor:pointer;font-family:Cinzel,serif;font-size:0.65rem;text-decoration:underline;padding:0;">Edit</button>`;
+      appendTo.appendChild(tag);
+      // Special tag — when the body contains mechanics the parser couldn't capture
+      if (_ccEntry && _hasSpecialAbilities(_ccEntry.body)) {
+        const _specTag = document.createElement('div');
+        _specTag.style.cssText = 'margin-top:0.3rem;font-family:Cinzel,serif;font-size:0.6rem;color:#b090d0;background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);border-radius:4px;padding:0.15rem 0.5rem;text-align:center;letter-spacing:0.05em;';
+        _specTag.textContent = '✦ Special — see description for additional mechanics';
+        appendTo.appendChild(_specTag);
+      }
+    } else {
+      const replBtn = document.createElement('button');
+      replBtn.textContent = 'Replace';
+      replBtn.style.cssText = 'margin-top:0.55rem;width:100%;background:transparent;border:1px solid var(--gold);border-radius:5px;color:var(--gold);font-family:Cinzel,serif;font-size:0.72rem;padding:0.3rem 0.7rem;cursor:pointer;transition:background 0.15s;';
+      replBtn.onmouseover = () => { replBtn.style.background = 'rgba(201,168,76,0.12)'; };
+      replBtn.onmouseout  = () => { replBtn.style.background = 'transparent'; };
+      replBtn.onclick = e => {
+        e.stopPropagation();
+        // Remove the current trait and navigate to traits browse page so user can pick a replacement
+        const traitName = trait.name || trait._name;
+        character.traits = character.traits.filter(t => (t.name||t._name) !== traitName);
+        updateBadge();
+        switchPage('traits');
+        showToast(`Removed "${traitName}" — choose a replacement trait below.`, 'info');
+      };
+      appendTo.appendChild(replBtn);
+    }
   });
 
   // ── Feats ─────────────────────────────────────────────────────────────────
@@ -19602,7 +20123,29 @@ function renderCharacter() {
       }
 
       // ── Source tag ──
-      if (feat && feat.source === 'class' && feat.autoGranted) {
+      if (feat && feat.isCustom) {
+        const _ccEntry = (character.customContent || []).find(c => c.id === feat._customId);
+        const _ccType = _ccEntry ? _ccEntry.type : 'feat';
+        // Use subtype color (Combat=red, Teamwork=blue, etc.) when available
+        const _subtypeKey = _ccEntry && _ccEntry.metadata && _ccEntry.metadata.featType;
+        const _subtypeKeyTitle = _subtypeKey ? (_subtypeKey.charAt(0).toUpperCase() + _subtypeKey.slice(1)) : null;
+        const _subtypeHex = _subtypeKeyTitle ? TYPE_COLORS[_subtypeKeyTitle] : null;
+        const _ccColors = _subtypeHex
+          ? { bg: _hexToRgba(_subtypeHex, 0.10), border: _hexToRgba(_subtypeHex, 0.35), text: _subtypeHex }
+          : (_CC_TYPE_COLORS[_ccType] || _CC_TYPE_COLORS.feat);
+        const _subtypeLabel = _subtypeKeyTitle ? `${_subtypeKeyTitle} ` : '';
+        const tag = document.createElement('div');
+        tag.style.cssText = `margin-top:0.45rem;font-family:Cinzel,serif;font-size:0.65rem;color:${_ccColors.text};background:${_ccColors.bg};border:1px solid ${_ccColors.border};border-radius:4px;padding:0.2rem 0.5rem;text-align:center;letter-spacing:0.04em;display:flex;align-items:center;justify-content:center;gap:0.4rem;`;
+        tag.innerHTML = `✦ Custom ${_subtypeLabel}${_ccType.charAt(0).toUpperCase() + _ccType.slice(1)} &nbsp;·&nbsp; <button onclick="event.stopPropagation();editCustomContent('${feat._customId || ''}')" style="background:none;border:none;color:${_ccColors.text};cursor:pointer;font-family:Cinzel,serif;font-size:0.65rem;text-decoration:underline;padding:0;">Edit</button>`;
+        appendTo.appendChild(tag);
+        // Special tag — when the body contains mechanics the parser couldn't capture (e.g. immediate actions)
+        if (_ccEntry && _hasSpecialAbilities(_ccEntry.body)) {
+          const _specTag = document.createElement('div');
+          _specTag.style.cssText = 'margin-top:0.3rem;font-family:Cinzel,serif;font-size:0.6rem;color:#b090d0;background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.3);border-radius:4px;padding:0.15rem 0.5rem;text-align:center;letter-spacing:0.05em;';
+          _specTag.textContent = '✦ Special — see description for additional mechanics';
+          appendTo.appendChild(_specTag);
+        }
+      } else if (feat && feat.source === 'class' && feat.autoGranted) {
         const tag = document.createElement('div');
         tag.style.cssText = 'margin-top:0.45rem;font-family:Cinzel,serif;font-size:0.65rem;color:var(--text-muted);background:rgba(100,100,100,0.08);border-radius:4px;padding:0.2rem 0.5rem;text-align:center;letter-spacing:0.04em;';
         tag.textContent = '✦ Auto-granted by class feature';
@@ -19618,41 +20161,74 @@ function renderCharacter() {
       if (feat) {
         const _featNameFx = (feat.name || feat._name || '').trim();
         const _featKeyFx  = _featNameFx.toLowerCase();
-        // Flat stat bonuses from character.statBonuses (already computed)
+        // Flat unconditional stat bonuses — green; exclude skill_* (handled below) and conditional ones
         const _featStatBonuses = (character.statBonuses || []).filter(
-          b => b.source === _featNameFx && b.value
+          b => b.source === _featNameFx && b.value && !(b.stat && b.stat.startsWith('skill_')) && !b.conditional
         );
-        // Skill bonuses from FEAT_SKILL_EFFECTS table
+        // Conditional stat bonuses — amber (not counted in totals, situational)
+        const _featCondStatBonuses = (character.statBonuses || []).filter(
+          b => b.source === _featNameFx && b.value && !(b.stat && b.stat.startsWith('skill_')) && b.conditional
+        );
+        // Skill bonuses from FEAT_SKILL_EFFECTS table (standard feats)
         const _featSkillBonuses = (FEAT_SKILL_EFFECTS[_featKeyFx] || []).filter(fx => fx.value);
+        // Custom feat skill bonuses from character.statBonuses (skill_* entries)
+        const _featCustomSkillBonuses = (character.statBonuses || []).filter(
+          b => b.source === _featNameFx && b.stat && b.stat.startsWith('skill_') && b.value
+        ).map(b => ({
+          skill: b.stat.replace('skill_', '').replace(/_/g, ' '),
+          value: b.value,
+          conditional: b.conditional || null,
+        }));
         // Informational _info entries from FEAT_EFFECTS (conditional feats)
         const _featInfoBonuses = (FEAT_EFFECTS[_featKeyFx] || []).filter(fx => fx.stat === '_info');
-        if (_featStatBonuses.length || _featSkillBonuses.length || _featInfoBonuses.length) {
+        if (_featStatBonuses.length || _featCondStatBonuses.length || _featSkillBonuses.length || _featCustomSkillBonuses.length || _featInfoBonuses.length) {
           const pillRow = document.createElement('div');
-          pillRow.style.cssText = 'margin-top:0.45rem;display:flex;flex-wrap:wrap;gap:0.25rem;';
+          pillRow.style.cssText = 'margin-top:0.45rem;display:flex;flex-wrap:wrap;gap:0.25rem;min-width:0;';
+          // Shared pill overflow style — truncates with ellipsis so text never blows out the card
+          const _pillBase = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;min-width:0;';
+          // Green: unconditional stat bonuses (always active)
           for (const b of _featStatBonuses) {
             const pill = document.createElement('span');
-            pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-              'background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;white-space:nowrap;';
+            pill.style.cssText = _pillBase + 'background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;';
             pill.textContent = b.label || `${b.stat} +${b.value}`;
+            pill.title = b.label || '';
             pillRow.appendChild(pill);
           }
-          for (const sk of _featSkillBonuses) {
+          // Amber: conditional stat bonuses (situational — not counted in stat totals)
+          for (const b of _featCondStatBonuses) {
             const pill = document.createElement('span');
-            pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-              'background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;white-space:nowrap;';
+            pill.style.cssText = _pillBase + 'background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;font-style:italic;';
+            const baseLabel = (b.label || '').replace(/\s*\([^)]+\)\s*$/, '').trim();
+            // First clause only (up to comma/semicolon/" and "), then "+ Special" if there's more
+            const _firstClause = b.conditional.split(/,|;|\s+and\s+/)[0].trim();
+            const _hasMoreCond = _firstClause.length < b.conditional.trim().length - 2;
+            pill.textContent = `\u2605 ${baseLabel} ${_firstClause}${_hasMoreCond ? ' + Special' : ''}`;
+            pill.title = `Conditional: ${b.conditional}`;
+            pillRow.appendChild(pill);
+          }
+          for (const sk of [..._featSkillBonuses, ..._featCustomSkillBonuses]) {
+            const pill = document.createElement('span');
+            pill.style.cssText = _pillBase + 'background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;';
+            // Truncate skill conditional to first clause too
+            const _skFirstClause = sk.conditional ? sk.conditional.split(/,|;|\s+and\s+/)[0].trim() : null;
+            const _skHasMore = sk.conditional && _skFirstClause.length < sk.conditional.trim().length - 2;
             pill.textContent = sk.conditional
-              ? `\u2191 ${sk.skill} +${sk.value} (${sk.conditional})`
+              ? `\u2191 ${sk.skill} +${sk.value} ${_skFirstClause}${_skHasMore ? ' + Special' : ''}`
               : `\u2191 ${sk.skill} +${sk.value}`;
+            if (sk.conditional) pill.title = `Conditional: ${sk.conditional}`;
             pillRow.appendChild(pill);
           }
           for (const info of _featInfoBonuses) {
             const pill = document.createElement('span');
-            pill.style.cssText = 'font-size:0.6rem;font-family:Cinzel,serif;padding:0.12rem 0.4rem;border-radius:3px;' +
-              'background:rgba(180,150,80,0.1);border:1px solid rgba(180,150,80,0.3);color:#c8a86a;white-space:nowrap;';
+            pill.style.cssText = _pillBase + 'background:rgba(180,150,80,0.1);border:1px solid rgba(180,150,80,0.3);color:#c8a86a;';
             pill.textContent = info.label;
+            pill.title = info.label || '';
             pillRow.appendChild(pill);
           }
-          appendTo.appendChild(pillRow);
+          // Insert pill row right after prereqs (before .card-desc), so it sits under prereqs not at the bottom
+          const _cardDesc = appendTo.querySelector('.card-desc');
+          if (_cardDesc) appendTo.insertBefore(pillRow, _cardDesc);
+          else appendTo.appendChild(pillRow);
         }
       }
 
@@ -20303,6 +20879,1432 @@ function toggleNavMenu() {
   document.querySelector('nav').classList.toggle('menu-open', !isOpen);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CUSTOM CONTENT SYSTEM — Phases 1, 2, 3 & 4
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Color helper ─────────────────────────────────────────────────────────
+function _hexToRgba(hex, alpha) {
+  if (!hex || !hex.startsWith('#')) return `rgba(130,90,200,${alpha})`;
+  const r = parseInt(hex.slice(1,3), 16);
+  const g = parseInt(hex.slice(3,5), 16);
+  const b = parseInt(hex.slice(5,7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Custom Stub Reconciliation ────────────────────────────────────────────
+// Fills in missing fields on feat/trait stubs that were saved before the enriched
+// stub format was introduced. Called after loading a character from a save slot.
+function _reconcileCustomStubs() {
+  (character.feats || []).forEach(f => {
+    if (!f.isCustom || !f._customId) return;
+    const cc = (character.customContent || []).find(c => c.id === f._customId);
+    if (!cc) return;
+    // Always normalize — fixes feats saved before title-case enforcement ('combat' → 'Combat')
+    { const _rt = (cc.metadata && cc.metadata.featType) || f.type || 'General'; f.type = _rt.charAt(0).toUpperCase() + _rt.slice(1); }
+    if (!f.description)  f.description  = cc.body || '';
+    if (!f.benefit)      f.benefit      = cc.body || '';
+    if (!f.prerequisites) f.prerequisites = (cc.metadata && cc.metadata.prerequisites) || '';
+    if (!f._source)      f._source      = 'Custom';
+  });
+  (character.traits || []).forEach(t => {
+    if (!t.isCustom || !t._customId) return;
+    const cc = (character.customContent || []).find(c => c.id === t._customId);
+    if (!cc) return;
+    if (!t.type)        t.type        = (cc.metadata && cc.metadata.traitType) || 'Basic';
+    if (!t.subtype)     t.subtype     = ((cc.metadata && cc.metadata.traitType) || 'basic').toLowerCase();
+    if (!t.description) t.description = cc.body || '';
+    if (!t._source)     t._source     = 'Custom';
+  });
+}
+
+// ── Custom Library (localStorage) ────────────────────────────────────────
+function saveToCustomLibrary(item) {
+  try {
+    const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
+    const key = item.type + 's';
+    if (!lib[key]) lib[key] = [];
+    // Avoid duplicate IDs
+    lib[key] = lib[key].filter(x => x.id !== item.id);
+    lib[key].push({ ...item, savedAt: Date.now() });
+    localStorage.setItem('customLibrary', JSON.stringify(lib));
+    showToast(`"${item.name}" saved to library`);
+  } catch (e) {
+    showToast('Library save failed: ' + e.message, 'warning');
+  }
+}
+
+function getCustomLibrary(type) {
+  try {
+    const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
+    return lib[type + 's'] || [];
+  } catch { return []; }
+}
+
+// ── Custom Pill Color Palette ─────────────────────────────────────────────
+const _PILL_PALETTE = [
+  '#e74c3c','#e67e22','#f1c40f','#2ecc71',
+  '#1abc9c','#3498db','#9b59b6','#e91e8a',
+  '#95a5a6','#ecf0f1',
+];
+
+// ── Custom Pill Modal ─────────────────────────────────────────────────────
+let _pillModalStat = null;
+let _pillModalEditId = null;
+
+function openCustomPillModal(stat, editId) {
+  _pillModalStat = stat || null;
+  _pillModalEditId = editId || null;
+
+  const modal = document.getElementById('custom-pill-modal-backdrop');
+  if (!modal) return;
+
+  // Reset form
+  document.getElementById('cp-label-input').value = '';
+  document.getElementById('cp-value-input').value = '0';
+  document.getElementById('cp-cond-input').value = '';
+  document.getElementById('cp-color-hex').value = '#9b59b6';
+  document.getElementById('cp-outline-solid').checked = true;
+  document.getElementById('cp-link-select').value = '';
+  _updatePillColorSwatch('#9b59b6');
+
+  // Pre-fill stat selector
+  const statSel = document.getElementById('cp-stat-select');
+  if (statSel && stat) statSel.value = stat;
+
+  // Pre-fill from existing if editing
+  if (editId) {
+    const existing = (character.customPills || []).find(p => p.id === editId);
+    if (existing) {
+      document.getElementById('cp-label-input').value = existing.label || '';
+      document.getElementById('cp-value-input').value = existing.value !== undefined ? existing.value : 0;
+      document.getElementById('cp-cond-input').value = existing.conditional || '';
+      const hexEl = document.getElementById('cp-color-hex');
+      if (hexEl) hexEl.value = existing.color || '#9b59b6';
+      _updatePillColorSwatch(existing.color || '#9b59b6');
+      const outlineEl = document.getElementById(`cp-outline-${existing.outlineStyle || 'solid'}`);
+      if (outlineEl) outlineEl.checked = true;
+      if (statSel && existing.stat) statSel.value = existing.stat;
+      const linkSel = document.getElementById('cp-link-select');
+      if (linkSel) linkSel.value = existing.linkedContentId || '';
+    }
+    document.getElementById('cp-modal-title').textContent = 'Edit Custom Modifier';
+  } else {
+    document.getElementById('cp-modal-title').textContent = 'Add Custom Modifier';
+  }
+
+  // Populate stat selector
+  _populatePillStatSelect(stat);
+  // Populate link select with custom content entries
+  _populatePillLinkSelect(editId ? ((character.customPills||[]).find(p=>p.id===editId)||{}).linkedContentId : null);
+
+  modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('cp-label-input').focus(), 50);
+}
+
+function closeCustomPillModal() {
+  const modal = document.getElementById('custom-pill-modal-backdrop');
+  if (modal) modal.style.display = 'none';
+  _pillModalStat = null;
+  _pillModalEditId = null;
+}
+
+function _populatePillStatSelect(currentStat) {
+  const sel = document.getElementById('cp-stat-select');
+  if (!sel) return;
+  sel.innerHTML = _MANUAL_STAT_OPTIONS.map(o =>
+    `<option value="${o.value}"${currentStat === o.value ? ' selected' : ''}>${o.label}</option>`
+  ).join('');
+}
+
+function _populatePillLinkSelect(currentLinkId) {
+  const sel = document.getElementById('cp-link-select');
+  if (!sel) return;
+  const all = character.customContent || [];
+  sel.innerHTML = `<option value="">— None (standalone) —</option>` +
+    all.map(cc => `<option value="${cc.id}"${cc.id === currentLinkId ? ' selected' : ''}>${cc.name} (${cc.type})</option>`).join('');
+}
+
+function _updatePillColorSwatch(hex) {
+  const preview = document.getElementById('cp-color-preview');
+  if (preview) preview.style.background = hex;
+  document.querySelectorAll('.cp-palette-swatch').forEach(sw => {
+    sw.style.outline = sw.dataset.color === hex ? '2px solid #fff' : 'none';
+  });
+}
+
+function _pillPaletteClick(hex) {
+  const hexEl = document.getElementById('cp-color-hex');
+  if (hexEl) hexEl.value = hex;
+  _updatePillColorSwatch(hex);
+}
+
+function saveCustomPillModal() {
+  const label = (document.getElementById('cp-label-input').value || '').trim();
+  if (!label) { showToast('Enter a label', 'warning'); document.getElementById('cp-label-input').focus(); return; }
+
+  const stat  = document.getElementById('cp-stat-select').value;
+  const value = parseInt(document.getElementById('cp-value-input').value) || 0;
+  const cond  = (document.getElementById('cp-cond-input').value || '').trim() || null;
+  const color = document.getElementById('cp-color-hex').value || '#9b59b6';
+  const outline = (document.querySelector('input[name="cp-outline"]:checked') || {}).value || 'solid';
+  const linkId = document.getElementById('cp-link-select').value || null;
+
+  if (!character.customPills) character.customPills = [];
+
+  if (_pillModalEditId) {
+    const idx = character.customPills.findIndex(p => p.id === _pillModalEditId);
+    if (idx >= 0) {
+      character.customPills[idx] = {
+        ...character.customPills[idx],
+        label, stat, value, conditional: cond, color,
+        outlineStyle: outline, linkedContentId: linkId,
+      };
+      showToast(`"${label}" updated`);
+    }
+  } else {
+    const newPill = {
+      id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('pill_' + Date.now() + '_' + Math.random().toString(36).slice(2)),
+      stat, value, label, color,
+      outlineStyle: outline,
+      outlineColor: color,
+      linkedContentId: linkId,
+      conditional: cond,
+      isCustom: true,
+    };
+    character.customPills.push(newPill);
+    // If linked to a content entry, register in its linkedPills
+    if (linkId) {
+      const cc = (character.customContent || []).find(c => c.id === linkId);
+      if (cc) { if (!cc.linkedPills) cc.linkedPills = []; cc.linkedPills.push(newPill.id); }
+    }
+    showToast(`"${label}" added to ${stat}`);
+  }
+
+  recomputeStatBonuses();
+  applyStatBonuses();     // update stat totals with new pill
+  closeCustomPillModal();
+
+  // Refresh ALL breakdown panels so the new pill is visible
+  document.querySelectorAll('[id^="stat-breakdown-"]').forEach(panel => {
+    if (panel._refreshPills) panel._refreshPills();
+  });
+
+  // Refresh derived stats (AC, saves, attacks, etc.)
+  if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
+
+  // Re-open the breakdown panel for the stat that was modified so user sees the new pill
+  const _savedStat = stat;
+  const targetBox = document.getElementById(`stat-breakdown-${_savedStat}`);
+  if (targetBox) {
+    targetBox.style.display = 'block';
+  }
+
+  // Refresh save breakdown panels
+  document.querySelectorAll('[data-save-breakdown-key]').forEach(box => {
+    if (box._updateBreakdown) box._updateBreakdown();
+  });
+
+  // Do NOT call renderCharacter() — it would rebuild stats panel and collapse all breakdown panels
+}
+
+function deleteCustomPill(pillId) {
+  const pill = (character.customPills || []).find(p => p.id === pillId);
+  if (!pill) return;
+  character.customPills = (character.customPills || []).filter(p => p.id !== pillId);
+  // Unlink from content entry
+  (character.customContent || []).forEach(cc => {
+    if (cc.linkedPills) cc.linkedPills = cc.linkedPills.filter(id => id !== pillId);
+  });
+  recomputeStatBonuses();
+  applyStatBonuses();     // update stat totals after pill removal
+  const bd = document.getElementById(`stat-breakdown-${pill.stat}`);
+  if (bd && bd._refreshPills) bd._refreshPills();
+  if (typeof window.refreshStatsDerived === 'function') window.refreshStatsDerived();
+  // Refresh save breakdown panels
+  document.querySelectorAll('[data-save-breakdown-key]').forEach(box => {
+    if (box._updateBreakdown) box._updateBreakdown();
+  });
+  showToast(`"${pill.label}" removed`);
+}
+
+// ── Auto-Calc Parser ──────────────────────────────────────────────────────
+// Parses freeform description text and returns [{stat, value, conditional}]
+/**
+ * Returns true when the body text describes special mechanics that the auto-parser
+ * cannot turn into a stat bonus — e.g. immediate actions, movements, rerolls, etc.
+ * Used to show a "Special" tag on custom content cards.
+ */
+function _hasSpecialAbilities(text) {
+  if (!text) return false;
+  const t = text.replace(/<[^>]*>/g, ' ').toLowerCase();
+  return /\b(immediate action|swift action|free action|once per (?:round|day|encounter)|per round|as an action|as a reaction|may move|can move|5[- ]foot(?: step)?|5 feet as|reroll|negate|deny|teleport|redirect|expend|spend a|substitute|exchange)\b/.test(t);
+}
+
+function _parseCustomBonuses(text) {
+  if (!text) return [];
+  const results = [];
+  const _strip = s => (s || '').replace(/<[^>]*>/g, ' ').replace(/&[a-z]+;/gi, ' ').replace(/\s+/g, ' ').trim();
+  const clean = _strip(text);
+
+  // Stat name to key map
+  const STAT_MAP = {
+    'strength': 'str', 'str': 'str',
+    'dexterity': 'dex', 'dex': 'dex',
+    'constitution': 'con', 'con': 'con',
+    'intelligence': 'int', 'int': 'int',
+    'wisdom': 'wis', 'wis': 'wis',
+    'charisma': 'cha', 'cha': 'cha',
+    'fortitude': 'fort_misc', 'fort': 'fort_misc',
+    'reflex': 'ref_misc', 'ref': 'ref_misc',
+    'will': 'will_misc',
+    'initiative': 'init_misc', 'init': 'init_misc',
+    'armor class': 'ac_misc', 'ac': 'ac_misc',
+    'natural armor': 'ac_natural',
+    'deflection': 'ac_deflect',
+    'attack': 'bab_misc', 'bab': 'bab_misc',
+    'cmb': 'cmb_misc', 'cmd': 'cmd_misc',
+    'speed': 'speed',
+    'hp': 'hp', 'hit points': 'hp',
+    'perception': 'skill_Perception',
+    'stealth': 'skill_Stealth',
+    'bluff': 'skill_Bluff',
+    'diplomacy': 'skill_Diplomacy',
+    'intimidate': 'skill_Intimidate',
+    'sense motive': 'skill_Sense Motive',
+    'spellcraft': 'skill_Spellcraft',
+    'knowledge (arcana)': 'skill_Knowledge (Arcana)',
+    'knowledge (religion)': 'skill_Knowledge (Religion)',
+    'knowledge (nature)': 'skill_Knowledge (Nature)',
+    'heal': 'skill_Heal',
+    'survival': 'skill_Survival',
+    'acrobatics': 'skill_Acrobatics',
+    'climb': 'skill_Climb',
+    'swim': 'skill_Swim',
+    'ride': 'skill_Ride',
+    'fly': 'skill_Fly',
+    'craft': 'skill_Craft',
+    'profession': 'skill_Profession',
+    'perform': 'skill_Perform',
+    'concentration': 'conc_misc',
+  };
+
+  const statKeys = Object.keys(STAT_MAP).sort((a, b) => b.length - a.length);
+  const _COND_WORDS = /\b(?:as\s+long\s+as|while|when(?:ever)?|only\s+(?:if|when)|against|vs\.?|during|if\s+you|in\s+\w+\s+situations?)\b/i;
+
+  // Pattern: "+N [type] bonus to/on [stat]" or "+N to [stat]"
+  const rx1 = /([+\-−–]\s*\d+)\s+(?:\w+\s+)?bonus\s+(?:on|to)\s+(?:your\s+)?([^.,;]+)/gi;
+  const rx2 = /([+\-−–]\s*\d+)\s+(?:to|on)\s+(?:your\s+)?(?:all\s+)?([^.,;]+)/gi;
+
+  const _extractConditional = (phrase) => {
+    const m = phrase.match(_COND_WORDS);
+    if (!m) return { base: phrase, cond: null };
+    const idx = phrase.search(_COND_WORDS);
+    return { base: phrase.slice(0, idx).trim(), cond: phrase.slice(idx).trim() };
+  };
+
+  const _tryAdd = (rawVal, rawPhrase) => {
+    const valStr = rawVal.replace(/[−–\s]/g, m => m.trim() === '' ? '' : '-');
+    const val = parseInt(valStr);
+    if (isNaN(val) || val === 0) return;
+
+    const phrase = rawPhrase.trim().toLowerCase();
+    const { base, cond } = _extractConditional(phrase);
+
+    // Try longest-match against stat map
+    for (const key of statKeys) {
+      if (base.includes(key)) {
+        const statKey = STAT_MAP[key];
+        // Avoid duplicate
+        if (!results.find(r => r.stat === statKey && r.value === val && r.conditional === cond)) {
+          results.push({ stat: statKey, value: val, conditional: cond });
+        }
+        return;
+      }
+    }
+  };
+
+  for (const m of clean.matchAll(rx1)) _tryAdd(m[1], m[2]);
+  for (const m of clean.matchAll(rx2)) _tryAdd(m[1], m[2]);
+
+  // Simple "+N STR/DEX/... modifier" pattern
+  for (const m of clean.matchAll(/([+\-−–]\s*\d+)\s+(strength|dexterity|constitution|intelligence|wisdom|charisma|str|dex|con|int|wis|cha)\b/gi))
+    _tryAdd(m[1], m[2]);
+
+  return results;
+}
+
+/**
+ * Parse pasted class/race text to detect features/abilities.
+ * Returns array of { name, type, body, level } objects.
+ */
+function _parseCustomFeatures(text) {
+  if (!text || !text.trim()) return [];
+  const features = [];
+  const lines = text.split('\n');
+  let current = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) {
+      if (current) current.body += '\n';
+      continue;
+    }
+
+    // Pattern 1: "Name (Ex):" or "Name (Su):" or "Name (Sp):"
+    const exMatch = line.match(/^([A-Z][A-Za-z\s\-']+?)\s*\((Ex|Su|Sp)\)\s*[:：]/i);
+    // Pattern 2: "Name:" where Name is Title Case
+    const colonMatch = !exMatch && line.match(/^([A-Z][A-Za-z\s\-']{2,50})\s*[:：]\s*(.*)$/);
+    // Pattern 3: Lines that are entirely uppercase (like "BONUS FEAT")
+    const boldMatch = !exMatch && !colonMatch && line.match(/^([A-Z][A-Z\s\-']{2,40})$/);
+
+    if (exMatch) {
+      if (current) features.push(current);
+      const afterColon = line.slice(line.indexOf(':') + 1).trim();
+      current = { name: exMatch[1].trim(), type: `(${exMatch[2]})`, body: afterColon, level: null };
+    } else if (colonMatch && colonMatch[1].length > 3) {
+      const skip = /^(note|example|table|source|page|see|the|this|when|at|if|hit dice|base attack|saving throw|skill rank)/i;
+      if (!skip.test(colonMatch[1])) {
+        if (current) features.push(current);
+        current = { name: colonMatch[1].trim(), type: '', body: (colonMatch[2] || '').trim(), level: null };
+      } else if (current) {
+        current.body += '\n' + line;
+      }
+    } else if (boldMatch) {
+      if (current) features.push(current);
+      current = {
+        name: boldMatch[1].trim().replace(/\b\w/g, c => c.toUpperCase()).replace(/\B\w+/g, c => c.toLowerCase()),
+        type: '', body: '', level: null
+      };
+    } else {
+      if (current) current.body += (current.body ? '\n' : '') + line;
+    }
+  }
+  if (current) features.push(current);
+
+  return features;
+}
+
+function _parseProgressionTable(text) {
+  if (!text || !text.trim()) return null;
+  const lines = text.trim().split('\n').map(l => l.trim()).filter(l => l);
+  if (lines.length < 2) return null;
+
+  // Detect delimiter from the line with the most cells (more reliable than line 0)
+  const sampleLine = lines.find(l => l.includes('\t')) || lines.find(l => l.includes('|')) || lines[0];
+  const delim = sampleLine.includes('\t') ? /\t+/
+    : sampleLine.includes('|') ? /\s*\|\s*/
+    : /\s{2,}/;
+
+  // Skip "merged section header" rows — these appear at the top of copied tables
+  // e.g. a row like "  Spells Per Day" that only has 1-2 cells while data rows have many more.
+  // Detect by splitting candidate header rows and comparing cell count to the next line.
+  let headerLineIdx = 0;
+  for (let i = 0; i < Math.min(lines.length - 1, 3); i++) {
+    const thisCells = lines[i].split(delim).map(c => c.trim()).filter(c => c).length;
+    const nextCells = lines[i + 1].split(delim).map(c => c.trim()).filter(c => c).length;
+    if (nextCells >= thisCells * 2 && thisCells <= 3) {
+      headerLineIdx = i + 1; // skip this row, real headers are on next line
+    } else {
+      break;
+    }
+  }
+
+  const headers = lines[headerLineIdx].split(delim).map(h => h.trim()).filter(h => h);
+  const rows = [];
+
+  for (let i = headerLineIdx + 1; i < lines.length; i++) {
+    const cells = lines[i].split(delim).map(c => c.trim());
+    if (cells.length < 2) continue;
+    // Skip separator lines (all dashes/equals/pipes)
+    if (cells.every(c => /^[-=|]+$/.test(c))) continue;
+    rows.push(cells);
+  }
+
+  return rows.length ? { headers, rows } : null;
+}
+
+function _updateProgressionTablePreview() {
+  const textarea = document.getElementById('cc-meta-progressionTable');
+  const preview = document.getElementById('cc-meta-progressionPreview');
+  if (!textarea || !preview) return;
+
+  const parsed = _parseProgressionTable(textarea.value);
+  if (!parsed || !parsed.rows.length) {
+    preview.innerHTML = '';
+    return;
+  }
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:0.6rem;font-family:monospace;margin-top:0.3rem;">';
+  html += '<thead><tr>';
+  for (const h of parsed.headers) {
+    html += `<th style="padding:0.2rem 0.4rem;border:1px solid rgba(201,168,76,0.2);background:rgba(201,168,76,0.08);color:var(--gold);text-align:center;font-family:Cinzel,serif;font-size:0.58rem;">${h}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (const row of parsed.rows) {
+    html += '<tr>';
+    for (let c = 0; c < parsed.headers.length; c++) {
+      html += `<td style="padding:0.15rem 0.3rem;border:1px solid rgba(201,168,76,0.1);color:var(--text-body);text-align:center;">${row[c] || ''}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+
+  preview.innerHTML = html;
+}
+
+function _updateSpellsKnownPreview() {
+  const textarea = document.getElementById('cc-meta-spellsKnownTable');
+  const preview  = document.getElementById('cc-meta-spellsKnownPreview');
+  if (!textarea || !preview) return;
+
+  const parsed = _parseProgressionTable(textarea.value);
+  if (!parsed || !parsed.rows.length) { preview.innerHTML = ''; return; }
+
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:0.6rem;font-family:monospace;margin-top:0.3rem;">';
+  html += '<thead><tr>';
+  for (const h of parsed.headers) {
+    html += `<th style="padding:0.2rem 0.4rem;border:1px solid rgba(74,184,204,0.2);background:rgba(74,184,204,0.08);color:#4ab8cc;text-align:center;font-family:Cinzel,serif;font-size:0.58rem;">${h}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (const row of parsed.rows) {
+    html += '<tr>';
+    for (let c = 0; c < parsed.headers.length; c++) {
+      html += `<td style="padding:0.15rem 0.3rem;border:1px solid rgba(74,184,204,0.1);color:var(--text-body);text-align:center;">${row[c] || ''}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  preview.innerHTML = html;
+}
+
+// ── Custom Content CRUD ───────────────────────────────────────────────────
+let _customModalEditId = null; // null = create, string = editing existing
+
+function openCustomContentModal(type, editId) {
+  _customModalEditId = editId || null;
+  const modal = document.getElementById('custom-content-modal-backdrop');
+  if (!modal) return;
+
+  // Reset form
+  const form = document.getElementById('custom-content-form');
+  if (form) form.reset();
+  document.getElementById('cc-bonus-preview').innerHTML = '';
+  document.getElementById('cc-manual-bonuses-list').innerHTML = '';
+  document.getElementById('cc-autocalc-section').style.display = 'block';
+  document.getElementById('cc-manual-section').style.display = 'none';
+  const toggle = document.getElementById('cc-autocalc-toggle');
+  if (toggle) toggle.checked = true;
+
+  // Reset class extras
+  const extrasEl = document.getElementById('cc-class-extras');
+  if (extrasEl) {
+    extrasEl.style.display = 'none';
+    const pt = document.getElementById('cc-meta-progressionTable');
+    const sk = document.getElementById('cc-meta-spellsKnownTable');
+    const mfl = document.getElementById('cc-manual-features-list');
+    if (pt) pt.value = '';
+    if (sk) sk.value = '';
+    if (mfl) mfl.innerHTML = '';
+    const ptPrev = document.getElementById('cc-meta-progressionPreview');
+    const skPrev = document.getElementById('cc-meta-spellsKnownPreview');
+    if (ptPrev) ptPrev.innerHTML = '';
+    if (skPrev) skPrev.innerHTML = '';
+  }
+
+  _renderCustomTypeFields('feat');
+
+  if (editId) {
+    // Pre-populate from existing custom content
+    const existing = (character.customContent || []).find(c => c.id === editId);
+    if (existing) {
+      document.getElementById('cc-type-select').value = existing.type;
+      document.getElementById('cc-name-input').value = existing.name || '';
+      document.getElementById('cc-body-textarea').value = existing.body || '';
+      const tog = document.getElementById('cc-autocalc-toggle');
+      if (tog) tog.checked = !!existing.autoCalc;
+      _onCustomAutoCalcToggle(!!existing.autoCalc, existing);
+      _renderCustomTypeFields(existing.type, existing.metadata || {});
+      // Show class extras and prefill if editing a class
+      if (existing.type === 'class' && extrasEl) {
+        extrasEl.style.display = 'flex';
+        const meta = existing.metadata || {};
+        const pt = document.getElementById('cc-meta-progressionTable');
+        const sk = document.getElementById('cc-meta-spellsKnownTable');
+        if (pt && meta.progressionTable) { pt.value = meta.progressionTable; setTimeout(_updateProgressionTablePreview, 0); }
+        if (sk && meta.spellsKnownTable)  { sk.value = meta.spellsKnownTable;  setTimeout(_updateSpellsKnownPreview, 0); }
+      }
+    }
+    document.getElementById('cc-modal-title').textContent = 'Edit Custom Content';
+  } else {
+    const t = type || 'feat';
+    document.getElementById('cc-type-select').value = t;
+    _renderCustomTypeFields(t);
+    if (extrasEl) extrasEl.style.display = t === 'class' ? 'flex' : 'none';
+    document.getElementById('cc-modal-title').textContent = 'Create Custom Content';
+  }
+
+  modal.style.display = 'flex';
+  document.getElementById('cc-name-input').focus();
+}
+
+function closeCustomContentModal() {
+  const modal = document.getElementById('custom-content-modal-backdrop');
+  if (modal) modal.style.display = 'none';
+  _customModalEditId = null;
+}
+
+function _onCustomAutoCalcToggle(isOn, existingContent) {
+  const autoSec = document.getElementById('cc-autocalc-section');
+  const manualSec = document.getElementById('cc-manual-section');
+  if (isOn) {
+    autoSec.style.display = 'block';
+    manualSec.style.display = 'none';
+    _updateCustomBonusPreview();
+  } else {
+    autoSec.style.display = 'none';
+    manualSec.style.display = 'block';
+    // Pre-populate manual bonuses if editing
+    if (existingContent && existingContent.manualBonuses) {
+      existingContent.manualBonuses.forEach(b => _addManualBonusRow(b));
+    }
+  }
+}
+
+function _updateCustomBonusPreview() {
+  const text = (document.getElementById('cc-body-textarea') || {}).value || '';
+  const preview = document.getElementById('cc-bonus-preview');
+  if (!preview) return;
+  const bonuses = _parseCustomBonuses(text);
+  if (!bonuses.length) {
+    preview.innerHTML = '<span style="color:var(--text-muted);font-style:italic;">No bonuses detected</span>'
+      + ' <button onclick="_switchToManualBonuses()" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-secondary);font-size:0.72rem;padding:0.1rem 0.4rem;cursor:pointer;margin-left:0.5rem;" title="Switch to manual bonus entry">Switch to Manual</button>';
+    return;
+  }
+  preview.innerHTML = bonuses.map(b => {
+    const sign = b.value > 0 ? '+' : '';
+    const cond = b.conditional ? `<span style="color:#f0c060;font-size:0.75em;margin-left:0.4em;">(${b.conditional})</span>` : '';
+    return `<div class="cc-detected-bonus">${sign}${b.value} ${b.stat}${cond}</div>`;
+  }).join('');
+
+  // ── Feature detection preview (classes/races only) ──
+  const _ccTypeForPreview = (document.getElementById('cc-type-select') || {}).value;
+  if (_ccTypeForPreview === 'class' || _ccTypeForPreview === 'race') {
+    const detectedFeatures = _parseCustomFeatures(text);
+    if (detectedFeatures.length) {
+      let featHtml = '<div style="margin-top:0.7rem;border-top:1px solid rgba(201,168,76,0.15);padding-top:0.5rem;">';
+      featHtml += '<div style="font-family:Cinzel,serif;font-size:0.7rem;color:var(--gold);margin-bottom:0.35rem;">Detected Features / Abilities</div>';
+      for (const f of detectedFeatures) {
+        const typeTag = f.type ? ` <span style="color:var(--text-muted);font-size:0.6rem;">${f.type}</span>` : '';
+        featHtml += `<details style="margin-bottom:0.25rem;background:rgba(30,28,24,0.5);border:1px solid rgba(201,168,76,0.12);border-radius:4px;padding:0.3rem 0.5rem;">`;
+        featHtml += `<summary style="cursor:pointer;font-family:Cinzel,serif;font-size:0.68rem;color:var(--gold-light);">${f.name}${typeTag}</summary>`;
+        featHtml += `<div style="font-size:0.62rem;color:var(--text-muted);margin-top:0.25rem;line-height:1.4;">${f.body.substring(0, 300)}${f.body.length > 300 ? '…' : ''}</div>`;
+        featHtml += `</details>`;
+      }
+      featHtml += '</div>';
+      preview.innerHTML += featHtml;
+    }
+  }
+}
+
+function _switchToManualBonuses() {
+  const toggle = document.getElementById('cc-autocalc-toggle');
+  if (toggle) { toggle.checked = false; _onCustomAutoCalcToggle(false); }
+}
+
+const _MANUAL_STAT_OPTIONS = [
+  {label:'STR', value:'str'}, {label:'DEX', value:'dex'}, {label:'CON', value:'con'},
+  {label:'INT', value:'int'}, {label:'WIS', value:'wis'}, {label:'CHA', value:'cha'},
+  {label:'Fort (Misc)', value:'fort_misc'}, {label:'Ref (Misc)', value:'ref_misc'},
+  {label:'Will (Misc)', value:'will_misc'},
+  {label:'Initiative', value:'init_misc'}, {label:'BAB (Misc)', value:'bab_misc'},
+  {label:'AC (Misc)', value:'ac_misc'}, {label:'AC (Natural)', value:'ac_natural'},
+  {label:'AC (Deflect)', value:'ac_deflect'}, {label:'CMB', value:'cmb_misc'},
+  {label:'CMD', value:'cmd_misc'}, {label:'HP', value:'hp'}, {label:'Speed', value:'speed'},
+  {label:'Concentration', value:'conc_misc'},
+  {label:'Perception', value:'skill_Perception'}, {label:'Stealth', value:'skill_Stealth'},
+  {label:'Diplomacy', value:'skill_Diplomacy'}, {label:'Bluff', value:'skill_Bluff'},
+  {label:'Intimidate', value:'skill_Intimidate'}, {label:'Sense Motive', value:'skill_Sense Motive'},
+  {label:'Spellcraft', value:'skill_Spellcraft'}, {label:'Heal', value:'skill_Heal'},
+  {label:'Survival', value:'skill_Survival'}, {label:'Acrobatics', value:'skill_Acrobatics'},
+  {label:'Climb', value:'skill_Climb'}, {label:'Swim', value:'skill_Swim'},
+  {label:'Ride', value:'skill_Ride'}, {label:'Fly', value:'skill_Fly'},
+  {label:'Craft', value:'skill_Craft'}, {label:'Profession', value:'skill_Profession'},
+  {label:'Perform', value:'skill_Perform'},
+];
+
+function _addManualBonusRow(prefill) {
+  const list = document.getElementById('cc-manual-bonuses-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'cc-manual-row';
+  const statOpts = _MANUAL_STAT_OPTIONS.map(o =>
+    `<option value="${o.value}"${prefill && prefill.stat === o.value ? ' selected' : ''}>${o.label}</option>`
+  ).join('');
+  row.innerHTML = `
+    <select class="cc-manual-stat">${statOpts}</select>
+    <input type="number" class="cc-manual-value" placeholder="±0" value="${prefill ? prefill.value : ''}" style="width:4.5rem;">
+    <input type="text" class="cc-manual-cond" placeholder="Conditional (optional)" value="${prefill ? (prefill.conditional || '') : ''}" style="flex:1;">
+    <button type="button" onclick="this.parentElement.remove()" style="background:rgba(200,60,60,0.2);border:1px solid rgba(200,60,60,0.4);border-radius:5px;color:#e08080;padding:0.15rem 0.5rem;cursor:pointer;">✕</button>
+  `;
+  list.appendChild(row);
+}
+
+function _readManualBonuses() {
+  const rows = document.querySelectorAll('#cc-manual-bonuses-list .cc-manual-row');
+  const out = [];
+  rows.forEach(row => {
+    const stat = row.querySelector('.cc-manual-stat').value;
+    const val  = parseInt(row.querySelector('.cc-manual-value').value);
+    const cond = (row.querySelector('.cc-manual-cond').value || '').trim() || null;
+    if (stat && !isNaN(val)) out.push({ stat, value: val, conditional: cond });
+  });
+  return out;
+}
+
+// Type-specific metadata fields
+function _renderCustomTypeFields(type, prefill) {
+  const container = document.getElementById('cc-type-fields');
+  if (!container) return;
+  prefill = prefill || {};
+
+  const html = {
+    feat: `
+      <label>Feat Type</label>
+      <select id="cc-meta-featType">
+        ${['Combat','General','Metamagic','Teamwork','Item Creation','Critical'].map(t =>
+          `<option value="${t.toLowerCase()}"${prefill.featType === t.toLowerCase() ? ' selected' : ''}>${t}</option>`
+        ).join('')}
+      </select>
+      <label>Prerequisites</label>
+      <input type="text" id="cc-meta-prereqs" placeholder="e.g. BAB +1, STR 13" value="${prefill.prerequisites || ''}">
+    `,
+    trait: `
+      <label>Trait Category</label>
+      <select id="cc-meta-traitType">
+        ${['Combat','Faith','Magic','Social','Race','Regional','Equipment'].map(t =>
+          `<option value="${t.toLowerCase()}"${prefill.traitType === t.toLowerCase() ? ' selected' : ''}>${t}</option>`
+        ).join('')}
+      </select>
+    `,
+    race: `
+      <label>Stat Modifiers</label>
+      <div class="cc-stat-grid">
+        ${['str','dex','con','int','wis','cha'].map(s =>
+          `<div class="cc-stat-cell"><span>${s.toUpperCase()}</span><input type="number" id="cc-meta-${s}" placeholder="0" value="${(prefill.statMods && prefill.statMods[s]) || ''}"></div>`
+        ).join('')}
+      </div>
+      <label>Size</label>
+      <select id="cc-meta-size">
+        ${['Fine','Diminutive','Tiny','Small','Medium','Large','Huge','Gargantuan','Colossal'].map(t =>
+          `<option value="${t}"${(prefill.size || 'Medium') === t ? ' selected' : ''}>${t}</option>`
+        ).join('')}
+      </select>
+      <label>Base Speed (ft)</label>
+      <input type="number" id="cc-meta-speed" placeholder="30" value="${prefill.speed || 30}">
+    `,
+    spell: `
+      <label>School</label>
+      <select id="cc-meta-school">
+        ${['Abjuration','Conjuration','Divination','Enchantment','Evocation','Illusion','Necromancy','Transmutation','Universal'].map(s =>
+          `<option${prefill.school === s ? ' selected' : ''}>${s}</option>`
+        ).join('')}
+      </select>
+      <label>Casting Time</label>
+      <input type="text" id="cc-meta-castingTime" placeholder="1 standard action" value="${prefill.castingTime || ''}">
+      <label>Range</label>
+      <input type="text" id="cc-meta-range" placeholder="Close (25 ft + 5 ft/2 levels)" value="${prefill.range || ''}">
+      <label>Duration</label>
+      <input type="text" id="cc-meta-duration" placeholder="1 minute/level" value="${prefill.duration || ''}">
+      <label>Saving Throw</label>
+      <input type="text" id="cc-meta-save" placeholder="Will negates" value="${prefill.save || ''}">
+      <label>Spell Resistance</label>
+      <select id="cc-meta-sr">
+        <option${!prefill.sr ? ' selected' : ''}>No</option>
+        <option${prefill.sr === 'yes' ? ' selected' : ''}>Yes</option>
+      </select>
+      <label>Components</label>
+      <input type="text" id="cc-meta-components" placeholder="V, S, M" value="${prefill.components || ''}">
+    `,
+    class: `
+      <label>Hit Die</label>
+      <select id="cc-meta-hitDie">
+        ${['d6','d8','d10','d12'].map(d => `<option${prefill.hitDie === d ? ' selected' : ''}>${d}</option>`).join('')}
+      </select>
+      <label>BAB Progression</label>
+      <select id="cc-meta-bab">
+        <option value="full"${prefill.bab === 'full' ? ' selected' : ''}>Full (+1/level)</option>
+        <option value="3/4"${prefill.bab === '3/4' ? ' selected' : ''}>3/4</option>
+        <option value="1/2"${prefill.bab === '1/2' ? ' selected' : ''}>1/2</option>
+      </select>
+      <label>Fortitude Save</label>
+      <select id="cc-meta-fortSave">
+        <option value="good"${prefill.fortSave === 'good' ? ' selected' : ''}>Good</option>
+        <option value="poor"${prefill.fortSave === 'poor' ? ' selected' : ''}>Poor</option>
+      </select>
+      <label>Reflex Save</label>
+      <select id="cc-meta-refSave">
+        <option value="good"${prefill.refSave === 'good' ? ' selected' : ''}>Good</option>
+        <option value="poor"${prefill.refSave === 'poor' ? ' selected' : ''}>Poor</option>
+      </select>
+      <label>Will Save</label>
+      <select id="cc-meta-willSave">
+        <option value="good"${prefill.willSave === 'good' ? ' selected' : ''}>Good</option>
+        <option value="poor"${prefill.willSave === 'poor' ? ' selected' : ''}>Poor</option>
+      </select>
+      <label>Skills/Level</label>
+      <input type="number" id="cc-meta-skillsPerLevel" placeholder="4" value="${prefill.skillsPerLevel || 4}">
+    `,
+    item: `
+      <label>Slot</label>
+      <select id="cc-meta-slot">
+        ${['None','Armor','Belt','Body','Chest','Eyes','Feet','Gloves','Head','Headband','Neck','Ring','Shield','Shoulders','Wrists','Slotless'].map(s =>
+          `<option${(prefill.slot || 'None') === s ? ' selected' : ''}>${s}</option>`
+        ).join('')}
+      </select>
+      <label>Price</label>
+      <input type="text" id="cc-meta-price" placeholder="e.g. 4,000 gp" value="${prefill.price || ''}">
+      <label>Weight</label>
+      <input type="text" id="cc-meta-weight" placeholder="1 lb." value="${prefill.weight || ''}">
+      <label>Aura</label>
+      <input type="text" id="cc-meta-aura" placeholder="Faint transmutation" value="${prefill.aura || ''}">
+      <label>Caster Level</label>
+      <input type="text" id="cc-meta-cl" placeholder="3rd" value="${prefill.cl || ''}">
+    `,
+    ability: `
+      <label>Parent Class</label>
+      <select id="cc-meta-parentClass">
+        <option value="">— None —</option>
+        ${(character.classes || []).map(c => {
+          const n = c.name || c._name || '';
+          return `<option value="${n}"${prefill.parentClass === n ? ' selected' : ''}>${n}</option>`;
+        }).join('')}
+      </select>
+      <label>Available From Level</label>
+      <input type="number" id="cc-meta-minLevel" placeholder="1" min="1" max="20" value="${prefill.minLevel || 1}">
+      <label>Uses Per Day</label>
+      <input type="number" id="cc-meta-usesPerDay" placeholder="Unlimited (-1)" min="-1" value="${prefill.usesPerDay !== undefined ? prefill.usesPerDay : -1}">
+    `,
+  };
+
+  container.innerHTML = html[type] || '';
+
+  // Show/hide the class-extras section (progression table, spells known, manual features)
+  const extrasEl = document.getElementById('cc-class-extras');
+  if (extrasEl) extrasEl.style.display = type === 'class' ? 'flex' : 'none';
+}
+
+function _readCustomMetadata(type) {
+  const g = id => { const el = document.getElementById(id); return el ? el.value : null; };
+  const meta = {};
+  if (type === 'feat') {
+    meta.featType = g('cc-meta-featType');
+    meta.prerequisites = g('cc-meta-prereqs');
+  } else if (type === 'trait') {
+    meta.traitType = g('cc-meta-traitType');
+  } else if (type === 'race') {
+    meta.statMods = {};
+    ['str','dex','con','int','wis','cha'].forEach(s => {
+      const v = parseInt(g('cc-meta-' + s)); if (v) meta.statMods[s] = v;
+    });
+    meta.size = g('cc-meta-size') || 'Medium';
+    meta.speed = parseInt(g('cc-meta-speed')) || 30;
+    // Parse features from body text
+    const _raceBodyText = (document.getElementById('cc-body-textarea') || {}).value || '';
+    meta.features = _parseCustomFeatures(_raceBodyText);
+  } else if (type === 'spell') {
+    meta.school = g('cc-meta-school');
+    meta.castingTime = g('cc-meta-castingTime');
+    meta.range = g('cc-meta-range');
+    meta.duration = g('cc-meta-duration');
+    meta.save = g('cc-meta-save');
+    meta.sr = (g('cc-meta-sr') || '').toLowerCase();
+    meta.components = g('cc-meta-components');
+  } else if (type === 'class') {
+    meta.hitDie = g('cc-meta-hitDie') || 'd8';
+    meta.bab = g('cc-meta-bab') || '3/4';
+    meta.fortSave = g('cc-meta-fortSave') || 'poor';
+    meta.refSave = g('cc-meta-refSave') || 'poor';
+    meta.willSave = g('cc-meta-willSave') || 'good';
+    meta.skillsPerLevel = parseInt(g('cc-meta-skillsPerLevel')) || 4;
+    // Parse features from body text
+    const _classBodyText = (document.getElementById('cc-body-textarea') || {}).value || '';
+    meta.features = _parseCustomFeatures(_classBodyText);
+    // Also collect manually-added features
+    const manualFeatureRows = document.querySelectorAll('#cc-manual-features-list > div');
+    const manualFeatures = [];
+    manualFeatureRows.forEach(row => {
+      const name = (row.querySelector('.cc-manual-feature-name') || {}).value || '';
+      const level = parseInt((row.querySelector('.cc-manual-feature-level') || {}).value) || null;
+      const body = (row.querySelector('.cc-manual-feature-body') || {}).value || '';
+      if (name.trim()) manualFeatures.push({ name: name.trim(), level, body: body.trim(), type: '' });
+    });
+    meta.features = [...(meta.features || []), ...manualFeatures];
+    // Progression table (now in cc-class-extras section of HTML)
+    meta.progressionTable = (document.getElementById('cc-meta-progressionTable') || {}).value || '';
+    if (meta.progressionTable) {
+      meta.parsedTable = _parseProgressionTable(meta.progressionTable);
+      // Auto-generate feature stubs from the "Special" column
+      if (meta.parsedTable) {
+        const specIdx = meta.parsedTable.headers.findIndex(h => /^special$/i.test(h.trim()));
+        if (specIdx >= 0) {
+          const existingNames = new Set(meta.features.map(f => f.name.toLowerCase()));
+          meta.parsedTable.rows.forEach((row, rowIdx) => {
+            const specCell = row[specIdx] || '';
+            // Detect level from first column (e.g. "1st", "2nd", "3rd")
+            const rawLvl = row[0] || '';
+            const lvl = parseInt(rawLvl) || (rowIdx + 1);
+            specCell.split(',').map(s => s.trim()).filter(s => s && s !== '—' && s !== '-' && s.length > 1)
+              .forEach(featName => {
+                // Strip trailing modifiers like "+1d6" or "×2"
+                const cleanName = featName.replace(/\s*[\+×x]\d.*$/, '').trim();
+                if (cleanName && !existingNames.has(cleanName.toLowerCase())) {
+                  existingNames.add(cleanName.toLowerCase());
+                  meta.features.push({ name: cleanName, type: '', body: '', level: lvl });
+                }
+              });
+          });
+        }
+      }
+    }
+    // Spells Known table
+    meta.spellsKnownTable = (document.getElementById('cc-meta-spellsKnownTable') || {}).value || '';
+    if (meta.spellsKnownTable) meta.parsedSpellsKnown = _parseProgressionTable(meta.spellsKnownTable);
+  } else if (type === 'item') {
+    meta.slot = g('cc-meta-slot');
+    meta.price = g('cc-meta-price');
+    meta.weight = g('cc-meta-weight');
+    meta.aura = g('cc-meta-aura');
+    meta.cl = g('cc-meta-cl');
+  } else if (type === 'ability') {
+    meta.parentClass = g('cc-meta-parentClass');
+    meta.minLevel = parseInt(g('cc-meta-minLevel')) || 1;
+    meta.usesPerDay = parseInt(g('cc-meta-usesPerDay'));
+  }
+  return meta;
+}
+
+function saveCustomContentModal(saveToLib) {
+  const name = (document.getElementById('cc-name-input').value || '').trim();
+  if (!name) { showToast('Enter a name', 'warning'); document.getElementById('cc-name-input').focus(); return; }
+
+  const type     = document.getElementById('cc-type-select').value;
+  const body     = (document.getElementById('cc-body-textarea').value || '').trim();
+  const autoCalc = document.getElementById('cc-autocalc-toggle').checked;
+  const metadata = _readCustomMetadata(type);
+
+  const parsedBonuses  = autoCalc ? _parseCustomBonuses(body) : [];
+  const manualBonuses  = autoCalc ? [] : _readManualBonuses();
+
+  const now = Date.now();
+
+  if (_customModalEditId) {
+    // Update existing
+    const idx = (character.customContent || []).findIndex(c => c.id === _customModalEditId);
+    if (idx >= 0) {
+      character.customContent[idx] = {
+        ...character.customContent[idx],
+        name, type, body, autoCalc, parsedBonuses, manualBonuses, metadata,
+        updatedAt: now,
+      };
+      showToast(`"${name}" updated`);
+
+      // Fix 6: Sync any existing feat/trait stubs so the character page reflects changes immediately
+      const updated = character.customContent[idx];
+      if (updated.type === 'feat') {
+        const featEntry = (character.feats || []).find(f => f._customId === updated.id);
+        if (featEntry) {
+          featEntry.name = updated.name;
+          const _rft = (updated.metadata && updated.metadata.featType) || 'General';
+          featEntry.type = _rft.charAt(0).toUpperCase() + _rft.slice(1);
+          featEntry.description = updated.body || '';
+          featEntry.benefit = updated.body || '';
+          featEntry.prerequisites = (updated.metadata && updated.metadata.prerequisites) || '';
+        }
+      } else if (updated.type === 'trait') {
+        const traitEntry = (character.traits || []).find(t => t._customId === updated.id);
+        if (traitEntry) {
+          traitEntry.name = updated.name;
+          traitEntry.type = (updated.metadata && updated.metadata.traitType) || 'Basic';
+          traitEntry.subtype = ((updated.metadata && updated.metadata.traitType) || 'basic').toLowerCase();
+          traitEntry.description = updated.body || '';
+        }
+      }
+
+      // Also update the library copy if this item came from or is saved to the library
+      if (updated.importedFromLib || updated._tempLibEdit) {
+        saveToCustomLibrary(updated);
+      }
+      // If it was a temporary import for editing only, remove from customContent after saving to library
+      if (updated._tempLibEdit) {
+        character.customContent = character.customContent.filter(c => c.id !== updated.id);
+        delete updated._tempLibEdit;
+      }
+    }
+  } else {
+    // Duplicate name check (warn but allow — IDs are unique)
+    const dupName = (character.customContent || []).some(c => c.name.toLowerCase() === name.toLowerCase() && c.type === type);
+    if (dupName && !confirm(`A custom ${type} named "${name}" already exists. Add anyway?`)) return;
+
+    // Create new
+    const entry = {
+      id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : ('cc_' + now + '_' + Math.random().toString(36).slice(2)),
+      type, name, body, source: 'Custom', isCustom: true,
+      autoCalc, parsedBonuses, manualBonuses,
+      linkedPills: [],
+      metadata,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (!character.customContent) character.customContent = [];
+    character.customContent.push(entry);
+
+    // Auto-add to character immediately on creation (silent = no extra toast).
+    if (type === 'feat') {
+      _addCustomToChar(entry.id, 'feats', true);
+    } else if (type === 'trait') {
+      _addCustomToChar(entry.id, 'traits', true);
+    } else if (type === 'class') {
+      _customClassApply(entry.id, entry.name, true);
+    } else if (type === 'race') {
+      _customRaceApply(entry.id, entry.name, true);
+    } else if (type === 'spell') {
+      _addCustomToChar(entry.id, 'spells', true);
+    } else if (type === 'item') {
+      _addCustomToChar(entry.id, 'equipment', true);
+    }
+
+    showToast(`"${name}" created & added to character`);
+    if (saveToLib) saveToCustomLibrary(entry);
+  }
+
+  recomputeStatBonuses();
+  updateBadge();
+  closeCustomContentModal();
+  renderCustomPage();
+  // If character page is active, refresh it
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+}
+
+function editCustomContent(id) {
+  openCustomContentModal(null, id);
+}
+
+function deleteCustomContent(id) {
+  const entry = (character.customContent || []).find(c => c.id === id);
+  if (!entry) return;
+  const linkedPills = (character.customPills || []).filter(p => p.linkedContentId === id);
+  const pillNote = linkedPills.length
+    ? `\n\nThis will also delete ${linkedPills.length} linked modifier pill${linkedPills.length > 1 ? 's' : ''}.`
+    : '';
+  if (!confirm(`Delete "${entry.name}"?${pillNote}`)) return;
+  character.customContent = (character.customContent || []).filter(c => c.id !== id);
+  // Remove linked pills
+  character.customPills = (character.customPills || []).filter(p => p.linkedContentId !== id);
+  // Fix 7: Also remove any corresponding feat/trait/race/class stubs from the character
+  if (entry.type === 'feat') {
+    character.feats = (character.feats || []).filter(f => f._customId !== id);
+  } else if (entry.type === 'trait') {
+    character.traits = (character.traits || []).filter(t => t._customId !== id);
+  } else if (entry.type === 'race' && character.race && character.race._customId === id) {
+    character.race = null;
+  } else if (entry.type === 'class') {
+    character.classes = (character.classes || []).filter(c => c._customId !== id);
+  }
+  recomputeStatBonuses();
+  updateBadge();
+  renderCustomPage();
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  showToast(`"${entry.name}" deleted`);
+}
+
+// ── Custom Page Renderer ──────────────────────────────────────────────────
+const _CC_TYPE_ICONS = {
+  feat: '⚔', trait: '🌟', race: '🧬', spell: '✨', class: '📜', item: '🪄', ability: '💡'
+};
+const _CC_TYPE_COLORS = {
+  feat:    {bg:'rgba(212,184,74,0.10)',  border:'rgba(212,184,74,0.35)',  text:'#d4b84a'},
+  trait:   {bg:'rgba(200,122,212,0.10)', border:'rgba(200,122,212,0.35)', text:'#c87ad4'},
+  race:    {bg:'rgba(122,184,232,0.10)', border:'rgba(122,184,232,0.35)', text:'#7ab8e8'},
+  spell:   {bg:'rgba(122,200,200,0.10)', border:'rgba(122,200,200,0.35)', text:'#7ac8c8'},
+  class:   {bg:'rgba(122,200,122,0.10)', border:'rgba(122,200,122,0.35)', text:'#7ac87a'},
+  item:    {bg:'rgba(212,122,122,0.10)', border:'rgba(212,122,122,0.35)', text:'#d47a7a'},
+  ability: {bg:'rgba(130,90,200,0.10)',  border:'rgba(130,90,200,0.35)',  text:'#b085e0'},
+};
+
+function _importFromLibrary(libId) {
+  // Find the item in the library, clone it into character.customContent, then re-render
+  const typeOrder = ['feat','trait','race','spell','class','item','ability'];
+  let found = null;
+  for (const t of typeOrder) {
+    const items = getCustomLibrary(t);
+    found = items.find(x => x.id === libId);
+    if (found) break;
+  }
+  if (!found) { showToast('Library item not found', 'warning'); return; }
+  if ((character.customContent || []).some(c => c.id === found.id)) {
+    showToast(`"${found.name}" already in this character`); return;
+  }
+  if (!character.customContent) character.customContent = [];
+  character.customContent.push({ ...found, importedFromLib: true });
+  recomputeStatBonuses();
+  renderCustomPage();
+  showToast(`"${found.name}" imported from library`);
+}
+
+function _editLibraryItem(libId) {
+  const typeOrder = ['feat','trait','race','spell','class','item','ability'];
+  let found = null;
+  for (const t of typeOrder) {
+    const items = getCustomLibrary(t);
+    found = items.find(x => x.id === libId);
+    if (found) break;
+  }
+  if (!found) { showToast('Library item not found', 'warning'); return; }
+  // Temporarily import to customContent if not already there so the modal can edit it
+  if (!(character.customContent || []).some(c => c.id === found.id)) {
+    if (!character.customContent) character.customContent = [];
+    character.customContent.push({ ...found, _tempLibEdit: true });
+  }
+  editCustomContent(found.id);
+}
+
+function _deleteLibraryItem(libId) {
+  const typeOrder = ['feat','trait','race','spell','class','item','ability'];
+  const lib = JSON.parse(localStorage.getItem('customLibrary') || '{}');
+  for (const t of typeOrder) {
+    if (!lib[t]) continue;
+    const items = Array.isArray(lib[t]) ? lib[t] : Object.values(lib[t]);
+    const idx = items.findIndex(x => x.id === libId);
+    if (idx >= 0) {
+      const name = items[idx].name;
+      items.splice(idx, 1);
+      lib[t] = items;
+      localStorage.setItem('customLibrary', JSON.stringify(lib));
+      renderCustomPage();
+      showToast(`"${name}" removed from library`);
+      return;
+    }
+  }
+  showToast('Library item not found', 'warning');
+}
+
+function renderCustomPage() {
+  const cont = document.getElementById('custom-page-content');
+  if (!cont) return;
+
+  const all = character.customContent || [];
+
+  // Collect library items not yet in this character
+  const charIds = new Set(all.map(c => c.id));
+  const typeOrder = ['feat','trait','race','spell','class','item','ability'];
+  const libExtras = [];
+  for (const t of typeOrder) {
+    getCustomLibrary(t).forEach(item => {
+      if (!charIds.has(item.id)) libExtras.push(item);
+    });
+  }
+
+  if (!all.length && !libExtras.length) {
+    cont.innerHTML = `
+      <div class="custom-page-empty">
+        <div style="font-size:3rem;margin-bottom:0.75rem;opacity:0.4;">🪄</div>
+        <div style="font-family:Cinzel,serif;font-size:1rem;color:var(--text-secondary);margin-bottom:0.5rem;">No custom content yet</div>
+        <div style="font-size:0.85rem;color:var(--text-muted);">Create your own feats, traits, spells, and more.</div>
+      </div>`;
+    return;
+  }
+
+  // Group character content by type
+  const groups = {};
+  all.forEach(cc => {
+    if (!groups[cc.type]) groups[cc.type] = [];
+    groups[cc.type].push(cc);
+  });
+
+  const typeOrder2 = ['feat','trait','race','spell','class','item','ability'];
+  let html = '';
+
+  for (const type of typeOrder2) {
+    if (!groups[type]) continue;
+    const col = _CC_TYPE_COLORS[type] || _CC_TYPE_COLORS.ability;
+    const icon = _CC_TYPE_ICONS[type] || '•';
+    html += `<div class="custom-type-group">
+      <div class="custom-type-header" style="color:${col.text};">
+        <span>${icon}</span>
+        <span>${type.charAt(0).toUpperCase() + type.slice(1)}s (${groups[type].length})</span>
+      </div>
+      <div class="custom-cards-row">`;
+
+    for (const cc of groups[type]) {
+      const bonusCount = (cc.autoCalc ? cc.parsedBonuses : cc.manualBonuses || []).length;
+
+      // ── Per-card subtype color (feats/traits override the group color) ──────
+      let cardCol = col;
+      if (type === 'feat' && cc.metadata && cc.metadata.featType) {
+        const _ftKey = cc.metadata.featType.charAt(0).toUpperCase() + cc.metadata.featType.slice(1);
+        if (TYPE_COLORS[_ftKey]) {
+          const _hex = TYPE_COLORS[_ftKey];
+          cardCol = { bg: _hexToRgba(_hex, 0.10), border: _hexToRgba(_hex, 0.35), text: _hex };
+        }
+      } else if (type === 'trait' && cc.metadata && cc.metadata.traitType) {
+        const _ttKey = cc.metadata.traitType.charAt(0).toUpperCase() + cc.metadata.traitType.slice(1);
+        if (TYPE_COLORS[_ttKey]) {
+          const _hex = TYPE_COLORS[_ttKey];
+          cardCol = { bg: _hexToRgba(_hex, 0.10), border: _hexToRgba(_hex, 0.35), text: _hex };
+        }
+      }
+      const subtypeLabel = (type === 'feat' && cc.metadata && cc.metadata.featType)
+        ? cc.metadata.featType.toUpperCase() + ' '
+        : (type === 'trait' && cc.metadata && cc.metadata.traitType)
+          ? cc.metadata.traitType.toUpperCase() + ' '
+          : '';
+
+      // ── Determine active state in the current build ──────────────────────
+      let isActive = false;
+      let activeLabel = '';
+      if (type === 'race') {
+        isActive = !!(character.race && character.race._customId === cc.id);
+        activeLabel = 'Active Race';
+      } else if (type === 'class') {
+        isActive = (character.classes || []).some(c => c._customId === cc.id);
+        activeLabel = 'In Build';
+      } else if (type === 'feat') {
+        isActive = (character.feats || []).some(f => f._customId === cc.id);
+        activeLabel = 'Added';
+      } else if (type === 'trait') {
+        isActive = (character.traits || []).some(t => t._customId === cc.id);
+        activeLabel = 'Added';
+      } else if (type === 'spell') {
+        const allSpells = Object.values(character.knownSpells || {}).flatMap(levels =>
+          Object.values(levels).flat()
+        );
+        isActive = allSpells.some(s => s._customId === cc.id);
+        activeLabel = 'In Spells';
+      } else if (type === 'item') {
+        isActive = (character.equipment || []).some(e => e._customId === cc.id);
+        activeLabel = 'Equipped';
+      }
+
+      const activeBadge = isActive
+        ? `<span style="font-family:Cinzel,serif;font-size:0.55rem;text-transform:uppercase;letter-spacing:0.08em;background:rgba(100,200,120,0.15);border:1px solid rgba(100,200,120,0.4);color:#7ac87a;border-radius:3px;padding:1px 5px;">✓ ${activeLabel}</span>`
+        : '';
+
+      // ── Type-specific action button ──────────────────────────────────────
+      let actionBtn = '';
+      const safeId = cc.id;
+      const safeName = (cc.name || '').replace(/'/g, "\\'");
+      if (type === 'race') {
+        actionBtn = isActive
+          ? `<button class="cc-action-btn cc-action-remove" onclick="_customRaceRemove()">✕ Remove Race</button>`
+          : `<button class="cc-action-btn cc-action-apply" onclick="_customRaceApply('${safeId}','${safeName}')">⚑ Set as Race</button>`;
+      } else if (type === 'class') {
+        actionBtn = isActive
+          ? `<button class="cc-action-btn cc-action-remove" onclick="_customClassRemove('${safeId}')">✕ Remove Class</button>`
+          : `<button class="cc-action-btn cc-action-apply" onclick="_customClassApply('${safeId}','${safeName}')">⚑ Add as Class</button>`;
+      } else if (type === 'feat') {
+        actionBtn = isActive
+          ? `<button class="cc-action-btn cc-action-remove" onclick="_customRemoveFromChar('${safeId}','feats')">✕ Remove</button>`
+          : `<button class="cc-action-btn cc-action-apply" onclick="_addCustomToChar('${safeId}','feats')">+ Add to Feats</button>`;
+      } else if (type === 'trait') {
+        actionBtn = isActive
+          ? `<button class="cc-action-btn cc-action-remove" onclick="_customRemoveFromChar('${safeId}','traits')">✕ Remove</button>`
+          : `<button class="cc-action-btn cc-action-apply" onclick="_addCustomToChar('${safeId}','traits')">+ Add to Traits</button>`;
+      } else if (type === 'spell') {
+        actionBtn = isActive
+          ? `<button class="cc-action-btn cc-action-remove" onclick="_customRemoveFromChar('${safeId}','spells')">✕ Remove</button>`
+          : `<button class="cc-action-btn cc-action-apply" onclick="_addCustomToChar('${safeId}','spells')">+ Add to Spells</button>`;
+      } else if (type === 'item') {
+        actionBtn = isActive
+          ? `<button class="cc-action-btn cc-action-remove" onclick="_customRemoveFromChar('${safeId}','equipment')">✕ Remove</button>`
+          : `<button class="cc-action-btn cc-action-apply" onclick="_addCustomToChar('${safeId}','equipment')">+ Add to Equipment</button>`;
+      }
+
+      // ── Metadata summary line ─────────────────────────────────────────────
+      let metaLine = '';
+      if (type === 'race' && cc.metadata) {
+        const parts = [];
+        if (cc.metadata.size) parts.push(cc.metadata.size);
+        if (cc.metadata.speed) parts.push(`${cc.metadata.speed} ft`);
+        const mods = Object.entries(cc.metadata.statMods || {}).map(([k,v]) => `${v>0?'+':''}${v} ${k.toUpperCase()}`);
+        if (mods.length) parts.push(mods.join(', '));
+        if (parts.length) metaLine = `<div class="custom-card-meta">${parts.join(' · ')}</div>`;
+      } else if (type === 'class' && cc.metadata) {
+        const parts = [];
+        if (cc.metadata.hitDie) parts.push(`HD ${cc.metadata.hitDie}`);
+        if (cc.metadata.bab) parts.push(`BAB ${cc.metadata.bab}`);
+        if (parts.length) metaLine = `<div class="custom-card-meta">${parts.join(' · ')}</div>`;
+      } else if (type === 'spell' && cc.metadata) {
+        const parts = [];
+        if (cc.metadata.school) parts.push(cc.metadata.school);
+        if (cc.metadata.castingTime) parts.push(cc.metadata.castingTime);
+        if (parts.length) metaLine = `<div class="custom-card-meta">${parts.join(' · ')}</div>`;
+      } else if (type === 'item' && cc.metadata) {
+        const parts = [];
+        if (cc.metadata.slot && cc.metadata.slot !== 'None') parts.push(cc.metadata.slot);
+        if (cc.metadata.price) parts.push(cc.metadata.price);
+        if (parts.length) metaLine = `<div class="custom-card-meta">${parts.join(' · ')}</div>`;
+      } else if (type === 'feat' && cc.metadata) {
+        const parts = [];
+        if (cc.metadata.featType) parts.push(cc.metadata.featType.charAt(0).toUpperCase() + cc.metadata.featType.slice(1));
+        if (cc.metadata.prerequisites) parts.push(`Prereq: ${cc.metadata.prerequisites.slice(0, 40)}${cc.metadata.prerequisites.length > 40 ? '…' : ''}`);
+        if (parts.length) metaLine = `<div class="custom-card-meta">${parts.join(' · ')}</div>`;
+      }
+
+      // ── Bonus pill HTML for this card ──────────────────────────────────────
+      const _bonusList = cc.autoCalc ? (cc.parsedBonuses || []) : (cc.manualBonuses || []);
+      let _bonusPillsHtml = '';
+      if (_bonusList.length) {
+        // Pill base style shared across all types — truncates with ellipsis, never overflows card
+        const _ccPillBase = 'font-size:0.57rem;font-family:Cinzel,serif;padding:0.1rem 0.35rem;border-radius:3px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;min-width:0;';
+        _bonusPillsHtml = '<div style="display:flex;flex-wrap:wrap;gap:0.22rem;margin-top:0.35rem;min-width:0;">';
+        for (const _b of _bonusList) {
+          if (!_b.stat || _b.stat === '_info') continue;
+          const _statLbl = _STAT_PILL_LABEL[_b.stat] || (_b.stat.startsWith('skill_') ? _b.stat.replace('skill_', '') : _b.stat);
+          const _valStr = _b.value > 0 ? `+${_b.value}` : `${_b.value}`;
+          const _isSkill = _b.stat.startsWith('skill_');
+          if (_b.conditional) {
+            const _fc = _b.conditional.split(/,|;|\s+and\s+/)[0].trim();
+            const _hm = _fc.length < _b.conditional.trim().length - 2;
+            const _cdisp = _fc + (_hm ? ' + Special' : '');
+            _bonusPillsHtml += `<span style="${_ccPillBase}background:rgba(220,170,60,0.1);border:1px solid rgba(220,170,60,0.3);color:#d4a840;font-style:italic;" title="${_b.conditional.replace(/"/g,"'")}">★ ${_valStr} ${_statLbl} ${_cdisp}</span>`;
+          } else if (_isSkill) {
+            _bonusPillsHtml += `<span style="${_ccPillBase}background:rgba(100,150,220,0.12);border:1px solid rgba(100,150,220,0.3);color:#8ab0da;">↑ ${_valStr} ${_statLbl}</span>`;
+          } else {
+            _bonusPillsHtml += `<span style="${_ccPillBase}background:rgba(100,200,120,0.12);border:1px solid rgba(100,200,120,0.3);color:#80c890;">${_valStr} ${_statLbl}</span>`;
+          }
+        }
+        _bonusPillsHtml += '</div>';
+      }
+
+      html += `
+        <div class="custom-card" style="border-color:${isActive ? cardCol.text : cardCol.border};background:${cardCol.bg};${isActive ? `box-shadow:0 0 0 1px ${cardCol.border};` : ''}">
+          <div class="custom-card-header">
+            <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;">
+              <span class="custom-card-badge" style="color:${cardCol.text};">${icon} ${subtypeLabel}${type.toUpperCase()}</span>
+              ${activeBadge}
+            </div>
+            <div class="custom-card-actions">
+              <button class="cc-card-btn" onclick="editCustomContent('${safeId}')" title="Edit">✎</button>
+              <button class="cc-card-btn cc-card-btn-del" onclick="deleteCustomContent('${safeId}')" title="Delete">✕</button>
+            </div>
+          </div>
+          <div class="custom-card-name">${cc.name || '(unnamed)'}</div>
+          ${metaLine}
+          ${cc.body ? `<div class="custom-card-body">${(cc.body || '').slice(0, 110)}${cc.body.length > 110 ? '…' : ''}</div>` : ''}
+          ${_bonusPillsHtml}
+          ${_hasSpecialAbilities(cc.body) ? `<div style="font-family:Cinzel,serif;font-size:0.58rem;color:#b090d0;background:rgba(160,120,200,0.1);border:1px solid rgba(160,120,200,0.28);border-radius:3px;padding:2px 6px;margin-top:0.25rem;letter-spacing:0.04em;">✦ Special mechanics — see description</div>` : ''}
+          <div class="custom-card-footer" style="display:flex;align-items:center;justify-content:space-between;gap:0.4rem;flex-wrap:wrap;">
+            ${actionBtn}
+            <button class="cc-lib-btn" onclick="saveToCustomLibrary(character.customContent.find(c=>c.id==='${safeId}'))" title="Save to shared library">📚 Save to Library</button>
+          </div>
+        </div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // ── Library items not yet imported into this character ────────────────────
+  if (libExtras.length) {
+    html += `<div class="custom-type-group" style="margin-top:0.5rem;">
+      <div class="custom-type-header" style="color:var(--text-muted);border-color:var(--border);">
+        <span>📚</span>
+        <span>Your Library — Not Yet Imported (${libExtras.length})</span>
+      </div>
+      <div class="custom-cards-row">`;
+    for (const lib of libExtras) {
+      const col = _CC_TYPE_COLORS[lib.type] || _CC_TYPE_COLORS.ability;
+      const icon = _CC_TYPE_ICONS[lib.type] || '•';
+      const safeId = lib.id;
+      const safeName = (lib.name || '').replace(/'/g, "\\'");
+      html += `
+        <div class="custom-card" style="border-color:${col.border};background:${col.bg};opacity:0.85;">
+          <div class="custom-card-header">
+            <div style="display:flex;align-items:center;gap:0.4rem;">
+              <span class="custom-card-badge" style="color:${col.text};">${icon} ${lib.type.toUpperCase()}</span>
+              <span style="font-family:Cinzel,serif;font-size:0.55rem;color:var(--text-muted);letter-spacing:0.06em;">LIBRARY</span>
+            </div>
+            <div class="custom-card-actions">
+              <button class="cc-card-btn" onclick="_editLibraryItem('${safeId}')" title="Edit">✎</button>
+              <button class="cc-card-btn cc-card-btn-del" onclick="_deleteLibraryItem('${safeId}')" title="Delete from library">✕</button>
+            </div>
+          </div>
+          <div class="custom-card-name">${lib.name || '(unnamed)'}</div>
+          ${lib.body ? `<div class="custom-card-body">${(lib.body || '').slice(0, 90)}${lib.body.length > 90 ? '…' : ''}</div>` : ''}
+          <div class="custom-card-footer" style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+            <button class="cc-action-btn cc-action-apply" onclick="_importFromLibrary('${safeId}')">↓ Import to Character</button>
+          </div>
+        </div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  cont.innerHTML = html;
+}
+
+// ── Custom race / class apply helpers ────────────────────────────────────
+function _customRaceApply(id, name, silent = false) {
+  character.race = { name, isCustom: true, _customId: id, altTraits: [] };
+  recomputeStatBonuses();
+  updateBadge();
+  renderCustomPage();
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  if (!silent) showToast(`"${name}" set as race`);
+}
+
+function _customRaceRemove() {
+  character.race = null;
+  recomputeStatBonuses();
+  updateBadge();
+  renderCustomPage();
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  showToast('Race removed');
+}
+
+function _customClassApply(id, name, silent = false) {
+  if ((character.classes || []).some(c => c._customId === id)) {
+    if (!silent) showToast(`"${name}" is already in your build`);
+    return;
+  }
+  if (!character.classes) character.classes = [];
+  character.classes.push({ name, isCustom: true, _customId: id, level: 1 });
+  recomputeStatBonuses();
+  updateBadge();
+  renderCustomPage();
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  if (!silent) showToast(`"${name}" added as class (level 1)`);
+}
+
+function _customClassRemove(id) {
+  character.classes = (character.classes || []).filter(c => c._customId !== id);
+  recomputeStatBonuses();
+  updateBadge();
+  renderCustomPage();
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  showToast('Custom class removed');
+}
+
+function _customRemoveFromChar(id, category) {
+  if (category === 'feats') {
+    character.feats = (character.feats || []).filter(f => f._customId !== id);
+  } else if (category === 'traits') {
+    character.traits = (character.traits || []).filter(t => t._customId !== id);
+  } else if (category === 'spells') {
+    // Remove from all known spell lists
+    for (const [cls, levels] of Object.entries(character.knownSpells || {})) {
+      for (const [lvl, spells] of Object.entries(levels)) {
+        character.knownSpells[cls][lvl] = spells.filter(s => s._customId !== id);
+      }
+    }
+  } else if (category === 'equipment') {
+    character.equipment = (character.equipment || []).filter(e => e._customId !== id);
+  }
+  recomputeStatBonuses();
+  updateBadge();
+  renderCustomPage();
+  if (document.getElementById('page-character').classList.contains('active')) renderCharacter();
+  showToast('Removed from character');
+}
+
 function switchPage(page) {
   // Intercept clicks on locked tabs — show a toast explaining what's needed (before closing overlay)
   const tabEl = document.querySelector(`.nav-tab[data-page="${page}"]`);
@@ -20327,6 +22329,8 @@ function switchPage(page) {
   
   if (page === 'character') {
     renderCharacter();
+  } else if (page === 'custom') {
+    renderCustomPage();
   } else if (page === 'spells') {
     renderSpellClassSelection();
   } else if (page === 'equipment') {
@@ -20614,6 +22618,8 @@ async function loadSavedCharacter(id) {
   if (character.stats.xp === undefined)    character.stats.xp    = 0;
   if (character.statsBase.xp === undefined) character.statsBase.xp = 0;
   if (!character.featToggles) character.featToggles = {};
+  if (!character.customContent) character.customContent = [];
+  if (!character.customPills) character.customPills = [];
 
   // Pre-fill name input
   const input = document.getElementById('chars-name-input');
@@ -20626,6 +22632,10 @@ async function loadSavedCharacter(id) {
   // Re-hydrate full DB content (body, sections) for each item
   showToast(`Loading "${slot.name}"…`);
   await _hydrateFromSave(character);
+
+  // Fix 8: Reconcile custom feat/trait stubs — saves created before the enriched stub
+  // format may be missing type, description, prerequisites. Fill them from customContent[].
+  _reconcileCustomStubs();
 
   updateBadge();
   if (document.getElementById('page-character').classList.contains('active')) {
@@ -21012,7 +23022,17 @@ function handleCharacterJsonUpload(event) {
       list.unshift({ id, name: finalName, savedAt: Date.now(), character: data.character });
       _putSavedChars(list);
       renderCharactersDrawer();
-      showToast(`"${finalName}" imported`);
+
+      // Notify if imported character has custom content
+      const importedCustom = (data.character.customContent || []);
+      const importedPills  = (data.character.customPills || []);
+      if (importedCustom.length || importedPills.length) {
+        const total = importedCustom.length + importedPills.length;
+        showToast(`"${finalName}" imported — includes ${total} custom item${total!==1?'s':''} (use Custom tab to save them to your library)`);
+      } else {
+        showToast(`"${finalName}" imported`);
+      }
+
       const btn = document.getElementById('nav-save-btn');
       if (btn) btn.classList.add('has-name');
     } catch (err) {
